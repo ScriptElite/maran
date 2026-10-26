@@ -232,10 +232,11 @@ test.describe('the golden path: install, account, site, certificate', () => {
     await plans.first().click()
     await page.getByRole('button', { name: 'Create account' }).click()
 
-    // The list is the operator's own confirmation, and it is read back from the panel rather than
-    // from the response the form received: a row here means the account survived the round trip.
-    await expect(page).toHaveURL(/\/accounts/, { timeout: HOST_OPERATION_TIMEOUT })
-    await expect(page.getByRole('link', { name: ACCOUNT_NAME })).toBeVisible({
+    // The new account's own page is the operator's confirmation (#78: creating opens it, because
+    // the invitation is handed over from there), and it is read back from the panel rather than
+    // from the response the form received: its name here means the account survived the round trip.
+    await expect(page).toHaveURL(/\/accounts\/[0-9a-f-]{36}$/, { timeout: HOST_OPERATION_TIMEOUT })
+    await expect(page.getByRole('heading', { name: ACCOUNT_NAME })).toBeVisible({
       timeout: HOST_OPERATION_TIMEOUT,
     })
 

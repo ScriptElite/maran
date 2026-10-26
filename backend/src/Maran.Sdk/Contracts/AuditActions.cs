@@ -430,6 +430,16 @@ public static class AuditActions
     public const string CustomerInvited = "CustomerInvited";
 
     /// <summary>
+    /// An administrator asked the panel for a one-time invitation link to hand to a hosting
+    /// account's owner themselves, instead of the panel mailing it. A distinct action from
+    /// <see cref="CustomerInvited"/> on purpose: a link shown to an administrator is a credential
+    /// that left the system by hand, and an auditor reading the journal should be able to tell it
+    /// from a mail the panel sent. The subject is the customer's login name; the entry never
+    /// carries the link, the token or its digest.
+    /// </summary>
+    public const string InvitationLinkIssued = "InvitationLinkIssued";
+
+    /// <summary>
     /// An invited login's owner set their first password from the invitation link, making the login
     /// usable.
     /// </summary>

@@ -156,9 +156,11 @@ const loadPlans = async (): Promise<void> => {
 }
 
 /**
- * Validates the form and, when valid, submits it to the store. Navigates back to the list on
- * success; a server-side failure is left in the store's `createErrorMessage` for the template to
- * render verbatim.
+ * Validates the form and, when valid, submits it to the store. On success it opens the new
+ * account's own page rather than the list (#78): a customer cannot sign in until their owner has
+ * been handed an invitation, and that page is where the invitation card — with a one-time link for
+ * a panel that cannot send mail — is waiting. A server-side failure is left in the store's
+ * `createErrorMessage` for the template to render verbatim.
  * @returns Resolves once the attempt has settled.
  */
 const submit = async (): Promise<void> => {
@@ -173,7 +175,7 @@ const submit = async (): Promise<void> => {
     ownerEmail: ownerEmail.value,
   })
   if (created !== null) {
-    await router.push({ name: 'accounts' })
+    await router.push({ name: 'account-detail', params: { id: created.id } })
   }
 }
 
