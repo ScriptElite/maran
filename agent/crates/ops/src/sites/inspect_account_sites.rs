@@ -8,6 +8,7 @@ use maran_agent_core::validation::web::domain::Domain;
 
 use crate::sites::model::account_site_suspension::AccountSiteSuspension;
 use crate::sites::model::site_suspension_fact::SiteSuspensionFact;
+use crate::sites::render_legacy_suspended_vhost::render_legacy_suspended_vhost;
 use crate::sites::render_suspended_vhost::render_suspended_vhost;
 use crate::sites::resolved_site_paths::resolved_site_paths;
 use crate::sites::{SiteHost, SitesOpError};
@@ -152,7 +153,11 @@ fn serving_stub(host: &dyn SiteHost, account: &AccountName, path: &Path, content
     // does not match, which is reported as not stubbed — the comparison
     // decides, the parse only proposes. That is what lets a one-line reader
     // stand in for an nginx parser here without weakening the answer.
+    // Either the current stub or the one written before the challenge
+    // location carried its symlink rule is a suspension.
     render_suspended_vhost(&primary, &aliases, &resolved).is_ok_and(|expected| expected == contents)
+        || render_legacy_suspended_vhost(&primary, &aliases, &resolved)
+            .is_ok_and(|expected| expected == contents)
 }
 
 /// Reads the primary name and the aliases out of a rendered `server_name` line.

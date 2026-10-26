@@ -4,7 +4,7 @@
 
 use maran_agent_core::validation::web::domain::Domain;
 
-use crate::sites::fake_site_host::{create_test_site, distro, php_input};
+use crate::sites::fake_site_host::{create_test_site, distro, legacy_suspended_text, php_input};
 use crate::sites::{SiteCertificate, SitePaths, disable_site};
 use crate::ssl::fake_ssl_host::{
     EXPIRY_UNIX, Event, FakeSslHost, KEY_PEM, matching_material, mismatched_material,
@@ -290,4 +290,23 @@ fn installing_a_certificate_on_a_suspended_site_places_the_material_and_leaves_t
         writes_before,
         "the suspended vhost must not be rewritten at all"
     );
+}
+
+#[test]
+fn installing_a_certificate_on_a_site_serving_the_earlier_stub_leaves_the_stub() {
+    let host = host_with_site();
+    let input = php_input();
+    let config_path = SitePaths::for_site(&input.account, &input.domain).config_path;
+    let legacy = legacy_suspended_text(&host, &input, "example.com");
+    host.place_config(&config_path, &legacy);
+    let writes_before = host.vhost_writes();
+
+    install_certificate(&host, distro(), &input, &matching_material()).unwrap();
+
+    assert_eq!(
+        host.config(&config_path).unwrap(),
+        legacy,
+        "a renewal must not wake a site suspended before the upgrade"
+    );
+    assert_eq!(host.vhost_writes(), writes_before);
 }

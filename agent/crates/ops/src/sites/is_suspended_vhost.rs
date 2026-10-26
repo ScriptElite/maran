@@ -3,6 +3,7 @@
 use crate::sites::SitesOpError;
 use crate::sites::model::create_site_input::CreateSiteInput;
 use crate::sites::model::site_paths::SitePaths;
+use crate::sites::render_legacy_suspended_vhost::render_legacy_suspended_vhost;
 use crate::sites::render_suspended_vhost::render_suspended_vhost;
 
 /// Whether `contents` is the suspended rendering of this site.
@@ -55,7 +56,15 @@ pub(crate) fn is_suspended_vhost(
 
     let suspended = render_suspended_vhost(input.domain.as_str(), &aliases, paths)?;
 
-    Ok(contents == suspended)
+    if contents == suspended {
+        return Ok(true);
+    }
+
+    // A stub an earlier agent wrote lacks the challenge location's symlink
+    // rule and is still a suspension.
+    let legacy = render_legacy_suspended_vhost(input.domain.as_str(), &aliases, paths)?;
+
+    Ok(contents == legacy)
 }
 
 #[cfg(test)]

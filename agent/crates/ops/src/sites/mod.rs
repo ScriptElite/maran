@@ -39,6 +39,7 @@ mod remove_vhost;
 // this area produces — a second rendering of a vhost is a second opinion about
 // what the site serves, and the halves drift on the one a browser reaches.
 pub(crate) mod remove_site_pool;
+pub(crate) mod render_legacy_suspended_vhost;
 pub(crate) mod render_suspended_vhost;
 pub(crate) mod render_vhost;
 pub(crate) mod resolved_site_paths;

@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use crate::sites::fake_site_host::{create_test_site, distro, php_input};
+use crate::sites::fake_site_host::{create_test_site, distro, legacy_suspended_text, php_input};
 use crate::sites::{SiteCertificate, SitePaths, disable_site};
 use crate::ssl::fake_ssl_host::{Event, FakeSslHost, matching_material};
 use crate::ssl::install_certificate::install_certificate;
@@ -123,6 +123,28 @@ fn removing_a_certificate_from_a_suspended_site_takes_the_material_and_leaves_th
             .unwrap(),
         suspended,
         "a certificate removal must not un-suspend a site"
+    );
+    assert_eq!(host.vhost_writes(), writes_before);
+}
+
+#[test]
+fn removing_a_certificate_from_a_site_serving_the_earlier_stub_leaves_the_stub() {
+    let host = FakeSslHost::passing();
+    let input = php_input();
+    create_test_site(&host, &input).unwrap();
+    let certificate = SiteCertificate::for_domain(&input.domain);
+    host.preinstall(&certificate, &matching_material());
+    let config_path = SitePaths::for_site(&input.account, &input.domain).config_path;
+    let legacy = legacy_suspended_text(&host, &input, "example.com");
+    host.place_config(&config_path, &legacy);
+    let writes_before = host.vhost_writes();
+
+    remove_certificate(&host, distro(), &input).unwrap();
+
+    assert_eq!(
+        host.config(&config_path).unwrap(),
+        legacy,
+        "a removal must not wake a site suspended before the upgrade"
     );
     assert_eq!(host.vhost_writes(), writes_before);
 }

@@ -353,3 +353,52 @@ pub(crate) fn create_test_site<H: SiteHost>(
         &[],
     )
 }
+
+/// The suspended vhost exactly as an agent wrote it before the challenge
+/// location carried its symlink rule, for `domain` and its `www.` alias.
+///
+/// A literal on purpose, byte for byte the text of
+/// `templates/tests/golden/nginx/suspended_site_legacy.conf` with this host's
+/// paths in it: a fixture built by deleting a line from the current render
+/// would move with the render it is meant to be compared against, and the
+/// recognition of stubs already on disk would stop being pinned by anything.
+pub(crate) fn legacy_suspended_text<H: SiteHost>(
+    host: &H,
+    input: &CreateSiteInput,
+    domain: &str,
+) -> String {
+    let account = input.account.as_str();
+    let root = host
+        .resolve_in_account_home(&input.account, Path::new(&format!("sites/{domain}")))
+        .unwrap();
+
+    format!(
+        "# Rendered by Maran. Do not edit: this file is replaced whenever the site changes.
+server {{
+    listen 80;
+    listen [::]:80;
+    server_name {domain} www.{domain};
+
+    access_log /var/log/maran/sites/{account}/{domain}.access.log;
+    error_log /var/log/maran/sites/{account}/{domain}.error.log;
+
+    # A suspended account's certificate still renews on schedule (sites.proto:
+    # the vhost is kept on disable \"so SSL renewal and SEO are not disrupted\"),
+    # so the ACME HTTP-01 challenge must stay reachable even though everything
+    # else on the site answers with the fixed refusal below.
+    location ^~ /.well-known/acme-challenge/ {{
+        root {root};
+        default_type \"text/plain\";
+    }}
+
+    # A suspended account keeps its vhost — so the domain still resolves to a
+    # clear answer instead of a connection refusal — but serves nothing of the
+    # account's own.
+    location / {{
+        return 403 \"This site has been suspended.\";
+    }}
+}}
+",
+        root = root.display()
+    )
+}

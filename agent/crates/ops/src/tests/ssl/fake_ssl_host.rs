@@ -208,6 +208,11 @@ impl FakeSslHost {
         self.sites.config(path)
     }
 
+    /// Puts `contents` at `path` as if that vhost were already on disk.
+    pub(crate) fn place_config(&self, path: &Path, contents: &str) {
+        self.sites.place_config(path, contents);
+    }
+
     /// How many vhost writes or removals reached the protocol.
     pub(crate) fn vhost_writes(&self) -> usize {
         self.sites.writes()
