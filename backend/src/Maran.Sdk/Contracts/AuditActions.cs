@@ -189,6 +189,26 @@ public static class AuditActions
     /// </summary>
     public const string AccountHomeGroupsRepaired = "AccountHomeGroupsRepaired";
 
+    /// <summary>
+    /// A plan was defined. Recorded on the refusals too: a name already taken is a conflict an
+    /// operator wants to find later, and a creation the validator accepted but the handler refused is
+    /// the half of the trail that explains a plan that is missing.
+    /// </summary>
+    public const string PlanCreated = "PlanCreated";
+
+    /// <summary>
+    /// A plan's name or limits were changed, and with them the limits of every account already on it.
+    /// Recorded on the refusals too — above all the refusal to lower a disk quota under an account's
+    /// current usage, which is the one an operator who then asks "why did my edit not take" needs.
+    /// </summary>
+    public const string PlanUpdated = "PlanUpdated";
+
+    /// <summary>
+    /// A plan was deleted. Recorded on the refusals too: the refusal because accounts still sit on the
+    /// plan is how an operator learns who is still being sold it.
+    /// </summary>
+    public const string PlanDeleted = "PlanDeleted";
+
     /// <summary>An SFTP login was created on the host, jailed into its account's own chroot.</summary>
     public const string SftpUserCreated = "SftpUserCreated";
 

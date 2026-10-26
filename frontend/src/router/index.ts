@@ -7,6 +7,8 @@ import AccountDetailPage from '../pages/accounts/AccountDetailPage.vue'
 import AccountsListPage from '../pages/accounts/AccountsListPage.vue'
 import AccountFormPage from '../pages/accounts/AccountFormPage.vue'
 import MyAccountPage from '../pages/accounts/MyAccountPage.vue'
+import PlanFormPage from '../pages/plans/PlanFormPage.vue'
+import PlansListPage from '../pages/plans/PlansListPage.vue'
 import SitesListPage from '../pages/sites/SitesListPage.vue'
 import SiteFormPage from '../pages/sites/SiteFormPage.vue'
 import SiteDetailPage from '../pages/sites/SiteDetailPage.vue'
@@ -72,6 +74,26 @@ export const createAppRouter = (): Router => {
             component: AccountDetailPage,
             props: true,
             meta: { module: 'accounts', title: 'accounts.detail.heading' },
+          },
+        ],
+      },
+      {
+        // Plans belong to the Accounts module — they are what an account is created against — so
+        // they carry its `meta.module` and fall behind its licence. They are administrators-only,
+        // and the endpoints are what say so: a customer who types this URL gets the panel's own
+        // refusal rendered on the page, with no second copy of the rule in a route guard.
+        path: '/plans',
+        component: DefaultLayout,
+        children: [
+          { path: '', name: 'plans', component: PlansListPage, meta: { module: 'accounts', title: 'plans.list.heading' } },
+          { path: 'new', name: 'plans-new', component: PlanFormPage, meta: { module: 'accounts', title: 'plans.form.headingNew' } },
+          // After 'new', for the reason the accounts routes give.
+          {
+            path: ':id',
+            name: 'plans-edit',
+            component: PlanFormPage,
+            props: true,
+            meta: { module: 'accounts', title: 'plans.form.headingEdit' },
           },
         ],
       },

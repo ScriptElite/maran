@@ -54,6 +54,7 @@ import {
   MemoryStick,
   Menu,
   Moon,
+  Package,
   Pencil,
   Plus,
   RotateCw,
@@ -177,6 +178,8 @@ export type UiIconName =
   | 'fileText'
   /** A house — the overview, the panel's home. */
   | 'house'
+  /** A parcel — a plan, the package an account is sold as. */
+  | 'package'
   /** A bin — deleting something. */
   | 'trash'
   /** A pencil — editing something. */
@@ -241,6 +244,7 @@ const ICONS: Record<UiIconName, LucideIcon> = {
   house: House,
   trash: Trash2,
   pencil: Pencil,
+  package: Package,
 }
 
 /**

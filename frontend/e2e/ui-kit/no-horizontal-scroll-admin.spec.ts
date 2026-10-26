@@ -14,7 +14,7 @@ import { runningFtpsStatus, stubFtpUsers, stubFtpsServer } from '../fixtures/stu
 import { stubHealthy } from '../fixtures/stub-health-route'
 import { stubModules } from '../fixtures/stub-modules-route'
 import { stubMonitoring, stubbedBucket } from '../fixtures/stub-monitoring-routes'
-import { stubPlans, THREE_PLANS } from '../fixtures/stub-plans-route'
+import { MANAGED_PLANS, stubManagedPlans, stubPlans, THREE_PLANS } from '../fixtures/stub-plans-route'
 import { setPersistedLocale } from '../fixtures/set-locale'
 import { stubSftpUsers } from '../fixtures/stub-sftp-routes'
 import {
@@ -88,6 +88,10 @@ const LONG_ACCOUNT = 'acme-industrial-holdings'
 const LONG_DOMAIN = 'storefront-staging-environment.acme-industrial-holdings.example.com'
 const LONG_COMMAND =
   '/usr/bin/php /home/acme-industrial-holdings/public_html/maintenance/rebuild-search-index.php --verbose'
+
+// A plan name has no length limit the layout can rely on short of the server's 64 characters, so
+// the plans screen is measured with one at that limit and with no break opportunity in it.
+const LONG_PLAN = 'Agency-reseller-bundle-with-dedicated-resources-and-priority-supp'
 
 const ACCOUNT: Account = {
   id: '00000000-0000-0000-0000-0000000000c1',
@@ -407,6 +411,12 @@ const stubPanel = async (page: Page): Promise<void> => {
   await stubDashboard(page, DASHBOARD)
 
   await stubPlans(page, THREE_PLANS)
+  await stubManagedPlans(page, [
+    ...MANAGED_PLANS.map((plan) => {
+      return { ...plan }
+    }),
+    { ...MANAGED_PLANS[0], id: '66666666-6666-6666-6666-666666666666', displayName: LONG_PLAN },
+  ])
   await stubAccounts(page, [ACCOUNT, SECOND_ACCOUNT])
   await page.route(`**/api/v1/accounts/${ACCOUNT.id}`, async (route) => {
     if (route.request().method() !== 'GET') {
@@ -472,6 +482,9 @@ const SCREENS: Screen[] = [
   { name: 'accounts list', path: '/accounts', marker: LONG_ACCOUNT },
   { name: 'account form', path: '/accounts/new', marker: null },
   { name: 'account detail', path: `/accounts/${ACCOUNT.id}`, marker: LONG_ACCOUNT },
+  { name: 'plans list', path: '/plans', marker: LONG_PLAN },
+  { name: 'plan form', path: '/plans/new', marker: null },
+  { name: 'plan edit', path: `/plans/${MANAGED_PLANS[0]?.id ?? ''}`, marker: null },
   { name: 'sites list', path: '/sites', marker: LONG_DOMAIN },
   { name: 'site form', path: '/sites/new', marker: null },
   { name: 'site detail, overview', path: `/sites/${SITE_ID}`, marker: LONG_DOMAIN, tab: 0 },
