@@ -5,6 +5,7 @@
       "ariaLabel": "Main navigation",
       "systemStatus": "System status",
       "auditJournal": "Audit journal",
+      "plans": "Plans",
       "lockedBadge": "Locked",
       "groups": {
         "overview": "Overview",

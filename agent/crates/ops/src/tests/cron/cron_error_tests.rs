@@ -25,7 +25,7 @@ fn a_privilege_failure_is_not_reported_as_a_file_failure() {
     for reason in [
         PrivError::NoSuchAccount,
         PrivError::RootAccount,
-        PrivError::DropFailed,
+        PrivError::DropFailed { syscall: "setuid" },
         PrivError::VerificationFailed,
     ] {
         let failure: CronError = reason.into();
@@ -44,9 +44,9 @@ fn a_privilege_failure_carries_the_underlying_reason_in_its_message() {
     // the agent refused, and a syscall that did not work — and an operator
     // reading one line has to be able to tell them apart.
     let refused = CronError::Privilege(PrivError::RootAccount).to_string();
-    let broken = CronError::Privilege(PrivError::DropFailed).to_string();
+    let broken = CronError::Privilege(PrivError::DropFailed { syscall: "setuid" }).to_string();
 
     assert_ne!(refused, broken);
     assert!(refused.contains(&PrivError::RootAccount.to_string()));
-    assert!(broken.contains(&PrivError::DropFailed.to_string()));
+    assert!(broken.contains(&PrivError::DropFailed { syscall: "setuid" }.to_string()));
 }

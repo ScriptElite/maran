@@ -31,13 +31,13 @@
       "subtitle": "The panel checks these values before sending them, and the server checks them again.",
       "fields": {
         "primaryDomain": "Primary domain",
-        "planId": "Plan ID",
+        "plan": "Plan",
         "ownerEmail": "Owner email"
       },
       "placeholders": {
         "name": "example",
         "primaryDomain": "example.com",
-        "planId": "Choose a plan",
+        "plan": "Choose a plan",
         "ownerEmail": "owner{'@'}example.com"
       },
       "submit": "Create account",
@@ -46,7 +46,7 @@
         "nameInvalid": "Name must be a lowercase, Linux-username-safe identifier (letters, digits, hyphen, underscore, starting with a letter, 3-32 characters).",
         "primaryDomainRequired": "Primary domain is required.",
         "primaryDomainInvalid": "Primary domain must be a valid domain name.",
-        "planIdRequired": "Plan ID is required.",
+        "planRequired": "Choose a plan.",
         "ownerEmailRequired": "Owner email is required.",
         "ownerEmailInvalid": "Owner email must be a valid email address."
       },

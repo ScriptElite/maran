@@ -54,6 +54,9 @@ const SHELL_ROUTE_LABEL_KEYS: Record<string, string> = {
  */
 const CHILD_ROUTE_LABEL_KEYS: Record<string, string> = {
   'accounts-new': 'accounts.form.heading',
+  plans: 'plans.list.heading',
+  'plans-new': 'plans.form.headingNew',
+  'plans-edit': 'plans.form.headingEdit',
 }
 
 /** Props accepted by {@link ShellBreadcrumb}. */

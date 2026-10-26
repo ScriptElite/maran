@@ -31,13 +31,13 @@
       "subtitle": "Վահանակը ստուգում է այս արժեքները ուղարկելուց առաջ, իսկ սերվերը ստուգում է դրանք կրկին։",
       "fields": {
         "primaryDomain": "Հիմնական դոմեն",
-        "planId": "Փաթեթի ID",
+        "plan": "Փաթեթ",
         "ownerEmail": "Սեփականատիրոջ էլ. փոստ"
       },
       "placeholders": {
         "name": "example",
         "primaryDomain": "example.com",
-        "planId": "Ընտրեք փաթեթը",
+        "plan": "Ընտրեք փաթեթը",
         "ownerEmail": "owner{'@'}example.com"
       },
       "submit": "Ստեղծել հաշիվ",
@@ -46,7 +46,7 @@
         "nameInvalid": "Անունը պետք է լինի փոքրատառ, Linux-օգտանվան համար անվտանգ նույնացուցիչ (տառեր, թվեր, գծիկ, ընդգծում, սկսվում է տառով, 3-32 նիշ)։",
         "primaryDomainRequired": "Հիմնական դոմենը պարտադիր է։",
         "primaryDomainInvalid": "Հիմնական դոմենը պետք է լինի վավեր դոմենային անուն։",
-        "planIdRequired": "Փաթեթի ID-ն պարտադիր է։",
+        "planRequired": "Ընտրեք փաթեթը։",
         "ownerEmailRequired": "Սեփականատիրոջ էլ. փոստը պարտադիր է։",
         "ownerEmailInvalid": "Սեփականատիրոջ էլ. փոստը պետք է լինի վավեր հասցե։"
       },

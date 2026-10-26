@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * Create-account screen: a form for name, primary domain, plan id and the
+ * Create-account screen: a form for name, primary domain, plan and the
  * account's owner contact address, with client-side validation mirroring the
  * server's
  * `CreateAccountCommandValidator` constraints exactly (same character
@@ -60,7 +60,7 @@ const store = useAccountsStore()
 const name: Ref<string> = ref('')
 /** Current value of the primary domain field. */
 const primaryDomain: Ref<string> = ref('')
-/** Current value of the plan id field. */
+/** Current value of the plan field (the chosen plan's id; the label says "Plan", #80). */
 const planId: Ref<string> = ref('')
 /** Current value of the owner's contact address field. */
 const ownerEmail: Ref<string> = ref('')
@@ -102,7 +102,7 @@ const planIdError: ComputedRef<string | null> = computed(() => {
   }
   // Nothing chosen is the only way this field can be wrong: the options come from the
   // backend, so the value is always one the server issued and needs no shape check.
-  return planId.value.length === 0 ? t('accounts.form.errors.planIdRequired') : null
+  return planId.value.length === 0 ? t('accounts.form.errors.planRequired') : null
 })
 
 /**
@@ -156,9 +156,11 @@ const loadPlans = async (): Promise<void> => {
 }
 
 /**
- * Validates the form and, when valid, submits it to the store. Navigates back to the list on
- * success; a server-side failure is left in the store's `createErrorMessage` for the template to
- * render verbatim.
+ * Validates the form and, when valid, submits it to the store. On success it opens the new
+ * account's own page rather than the list (#78): a customer cannot sign in until their owner has
+ * been handed an invitation, and that page is where the invitation card — with a one-time link for
+ * a panel that cannot send mail — is waiting. A server-side failure is left in the store's
+ * `createErrorMessage` for the template to render verbatim.
  * @returns Resolves once the attempt has settled.
  */
 const submit = async (): Promise<void> => {
@@ -173,7 +175,7 @@ const submit = async (): Promise<void> => {
     ownerEmail: ownerEmail.value,
   })
   if (created !== null) {
-    await router.push({ name: 'accounts' })
+    await router.push({ name: 'account-detail', params: { id: created.id } })
   }
 }
 
@@ -226,11 +228,11 @@ onMounted(loadPlans)
           />
           <UiSelect
             v-model="planId"
-            :label="t('accounts.form.fields.planId')"
+            :label="t('accounts.form.fields.plan')"
             :options="planOptions"
             :error="planIdError"
             required
-            :placeholder="t('accounts.form.placeholders.planId')"
+            :placeholder="t('accounts.form.placeholders.plan')"
           />
           <UiInput
             v-model="ownerEmail"

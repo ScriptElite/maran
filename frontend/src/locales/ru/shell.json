@@ -5,6 +5,7 @@
       "ariaLabel": "Основная навигация",
       "systemStatus": "Состояние системы",
       "auditJournal": "Журнал аудита",
+      "plans": "Тарифы",
       "lockedBadge": "Заблокировано",
       "groups": {
         "overview": "Обзор",

@@ -5,6 +5,7 @@
       "ariaLabel": "Հիմնական նավիգացիա",
       "systemStatus": "Համակարգի կարգավիճակ",
       "auditJournal": "Աուդիտի մատյան",
+      "plans": "Սակագներ",
       "lockedBadge": "Արգելափակված",
       "groups": {
         "overview": "Ակնարկ",
