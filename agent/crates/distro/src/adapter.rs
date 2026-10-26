@@ -130,12 +130,15 @@ pub trait DistroAdapter: Send + Sync {
     /// names no absolute binary path of its own.
     fn openssl_binary(&self) -> &'static str;
 
-    /// Absolute path of the package manager binary, for the process-execution
-    /// allow-list.
+    /// Absolute path of the package manager binary.
     ///
     /// `/usr/bin/apt-get` on the Debian family, `/usr/bin/dnf` on the RHEL
     /// family — the two package repositories the spec fixes (§4) are reached
-    /// through these.
+    /// through these. The agent does NOT spawn it: a package install runs in
+    /// the installer's `maran-php-install@.service` unit, outside the agent's
+    /// sandbox. This is the program that unit's rendered `ExecStart=` names;
+    /// the installer (`installer/lib/70-services.sh`) holds a second literal
+    /// copy of the same path, so the two must be changed together.
     fn package_manager(&self) -> &'static str;
 
     /// Absolute path of `tar`, for the process-execution allow-list.
