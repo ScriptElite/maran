@@ -5,7 +5,20 @@ than a strict category list: what changed and why it matters to somebody running
 
 ## Unreleased
 
-Nothing yet.
+**Installing a PHP version from the panel failed, and could leave the package database broken.** The
+agent ran the package manager itself, inside a sandbox that keeps `/usr` read-only. On Ubuntu 24.04
+the install died on "Read-only file system" part-way through and left fifteen packages half-configured
+in dpkg, which also blocks unattended security updates; on RHEL-family hosts dnf reported the read-only
+mount as a lack of disk space. The agent now asks systemd to start `maran-php-install@<package>.service`,
+a one-shot unit that is never enabled and runs only the family's package manager (`--no-remove` on
+Debian, no `--allowerasing` on RHEL) for that one package, outside the agent's sandbox, which is not
+widened. The install also survives an agent restart or a dropped browser tab. Measured on Ubuntu 24.04
+and Rocky Linux 9: the install now succeeds and the agent's sandbox is unchanged.
+
+Hosts must re-run the installer to receive the unit: a host that took a new agent binary alone fails
+PHP installs with a "unit not found" error, and there is no in-process fallback. The product still
+provisions no Remi or Sury repository, so RHEL-family hosts and Debian releases without the version in
+the distribution archive cannot install it regardless of this change.
 
 ## 1.0.0-beta.3 — 2026-10-03
 

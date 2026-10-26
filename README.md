@@ -176,8 +176,9 @@ of its own. The rest are the services a hosting panel exists to manage.
     curl -sSL https://get.maran.innovayse.com | sudo bash
 
 The installer verifies the system before changing anything, installs signed release
-artifacts, hardens the systemd units, and prints a one-time link for creating the first
-administrator in the browser. Updates are signed, taken in one click or via the `maran`
+artifacts, hardens the systemd units (all but the PHP package-install unit, which is deliberately not
+sandboxed because a package install must write /usr), and prints a one-time link for creating the
+first administrator in the browser. Updates are signed, taken in one click or via the `maran`
 command line tool, and reversible with an automatic database dump and a rollback command.
 
 ### What this puts on your server
