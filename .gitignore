@@ -145,3 +145,4 @@ Thumbs.db
 # an input to anything: scripts/lib/install-polygon.sh prints the path it wrote, and a reader opens
 # that file. Committing them would put a machine-specific transcript in the history of every fix.
 .polygon-logs/
+.taste-skill/
