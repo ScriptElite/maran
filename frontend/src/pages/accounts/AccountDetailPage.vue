@@ -49,6 +49,7 @@ import UiDescriptionList from '../../components/ui/UiDescriptionList.vue'
 import UiEmptyState from '../../components/ui/UiEmptyState.vue'
 import UiConfirm from '../../components/ui/UiConfirm.vue'
 import UiPageHeading from '../../components/ui/UiPageHeading.vue'
+import UiSectionHeading from '../../components/ui/UiSectionHeading.vue'
 import UiSpinner from '../../components/ui/UiSpinner.vue'
 import AccountDeleteDialog from '../../components/accounts/AccountDeleteDialog.vue'
 import { useAccountsStore } from '../../stores/accounts'
@@ -189,70 +190,90 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="w-full">
+  <section class="flex w-full flex-col gap-4">
     <UiSpinner v-if="accountsStore.loading" :label="t('accounts.detail.loading')" />
 
     <template v-else-if="accountsStore.selected !== null">
+      <!-- The name is an identifier (a lowercase Linux user name), so the title is set in the mono
+           face rather than the uppercase display one: the delete dialog asks for it typed exactly,
+           and a title shouting it in capitals would show a different string from the one to type. -->
       <UiPageHeading
-        class="mb-4"
+        :eyebrow="t('accounts.list.heading')"
         :title="accountsStore.selected.name"
         :subtitle="accountsStore.selected.primaryDomain"
+        mono
       >
         <template #actions>
-          <UiButton variant="ghost" @click="router.push({ name: 'accounts' })">
+          <UiButton variant="ghost" :to="{ name: 'accounts' }">
             {{ t('accounts.detail.backToList') }}
           </UiButton>
         </template>
       </UiPageHeading>
 
-      <UiAlert v-if="accountsStore.errorMessage !== null" variant="error" class="mb-4">
+      <!-- What needs attention comes first, before the details: a refusal the panel sent, then a
+           suspended account, then the note about the invitation. The reactivation control itself is
+           in the actions card and is NOT repeated here, so the page has one button with that name. -->
+      <UiAlert v-if="accountsStore.errorMessage !== null" variant="error">
         {{ accountsStore.errorMessage }}
+      </UiAlert>
+
+      <UiAlert v-if="accountsStore.selected.status === 'suspended'" variant="warning">
+        {{ t('accounts.detail.suspendedNotice') }}
       </UiAlert>
 
       <!-- Says SENT, never delivered: the mail queue is deliberately non-durable and this page
            has no way to know whether the mail arrived. -->
-      <UiAlert v-if="invitationResent" variant="info" class="mb-4">
+      <UiAlert v-if="invitationResent" variant="info">
         {{ t('accounts.detail.invitationResent') }}
       </UiAlert>
 
-      <UiCard>
-        <UiDescriptionList>
-          <UiDescriptionItem :term="t('common.name')">
-            {{ accountsStore.selected.name }}
-          </UiDescriptionItem>
-          <UiDescriptionItem :term="t('accounts.detail.primaryDomainLabel')" mono>
-            {{ accountsStore.selected.primaryDomain }}
-          </UiDescriptionItem>
-          <UiDescriptionItem :term="t('accounts.detail.statusLabel')">
-            <UiBadge :variant="accountsStore.selected.status === 'active' ? 'success' : 'warning'">
-              {{ t(`accounts.status.${accountsStore.selected.status}`) }}
-            </UiBadge>
-          </UiDescriptionItem>
-          <UiDescriptionItem :term="t('accounts.detail.createdAtLabel')">
-            {{ formatDate(accountsStore.selected.createdAt, localeStore.current) }}
-          </UiDescriptionItem>
-        </UiDescriptionList>
-      </UiCard>
+      <div class="grid gap-4 lg:grid-cols-3">
+        <UiCard class="lg:col-span-2">
+          <UiDescriptionList>
+            <UiDescriptionItem :term="t('common.name')" mono>
+              {{ accountsStore.selected.name }}
+            </UiDescriptionItem>
+            <UiDescriptionItem :term="t('accounts.detail.primaryDomainLabel')" mono>
+              {{ accountsStore.selected.primaryDomain }}
+            </UiDescriptionItem>
+            <UiDescriptionItem :term="t('accounts.detail.statusLabel')">
+              <UiBadge :variant="accountsStore.selected.status === 'active' ? 'success' : 'warning'">
+                {{ t(`accounts.status.${accountsStore.selected.status}`) }}
+              </UiBadge>
+            </UiDescriptionItem>
+            <UiDescriptionItem :term="t('accounts.detail.createdAtLabel')" mono>
+              {{ formatDate(accountsStore.selected.createdAt, localeStore.current) }}
+            </UiDescriptionItem>
+          </UiDescriptionList>
+        </UiCard>
 
-      <div class="mt-4 flex flex-wrap items-center gap-2">
-        <UiButton
-          v-if="accountsStore.selected.status === 'active'"
-          variant="secondary"
-          @click="ask('suspend')"
-        >
-          {{ t('accounts.detail.suspend') }}
-        </UiButton>
-        <UiButton v-else variant="secondary" @click="ask('reactivate')">
-          {{ t('accounts.detail.reactivate') }}
-        </UiButton>
-        <UiButton variant="destructive" @click="askDelete">
-          {{ t('common.delete') }}
-        </UiButton>
-        <!-- Administrator-only on the server; no matching check here (rules/architecture.md). The
-             recovery path for an owner who never received their first invitation. -->
-        <UiButton variant="secondary" :disabled="accountsStore.acting" @click="resendInvitation">
-          {{ t('accounts.detail.resendInvitation') }}
-        </UiButton>
+        <UiCard class="flex flex-col gap-4">
+          <UiSectionHeading :title="t('common.actions')" />
+          <div class="flex flex-wrap items-center gap-2">
+            <UiButton
+              v-if="accountsStore.selected.status === 'active'"
+              variant="secondary"
+              @click="ask('suspend')"
+            >
+              {{ t('accounts.detail.suspend') }}
+            </UiButton>
+            <UiButton v-else variant="secondary" @click="ask('reactivate')">
+              {{ t('accounts.detail.reactivate') }}
+            </UiButton>
+            <!-- Administrator-only on the server; no matching check here (rules/architecture.md).
+                 The recovery path for an owner who never received their first invitation. -->
+            <UiButton variant="secondary" :disabled="accountsStore.acting" @click="resendInvitation">
+              {{ t('accounts.detail.resendInvitation') }}
+            </UiButton>
+          </div>
+          <!-- Deletion sits apart, under a rule: it is the one action that cannot be undone, and it
+               must not read as a sibling of the two above it. -->
+          <div class="border-t border-border-subtle pt-4">
+            <UiButton variant="destructive" @click="askDelete">
+              {{ t('common.delete') }}
+            </UiButton>
+          </div>
+        </UiCard>
       </div>
 
       <!-- `:open` is bound to a value that really changes, and this dialog needs no `v-if`: it has

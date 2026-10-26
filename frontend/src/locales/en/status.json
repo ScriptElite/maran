@@ -2,6 +2,7 @@
   "app": {
     "status": {
       "heading": "System status",
+      "eyebrow": "Maran · This server",
       "checking": "Checking the panel API…",
       "ok": "All systems are operational.",
       "unreachable": "Could not reach the API",
@@ -29,6 +30,23 @@
         "empty": "Nothing has been recorded yet.",
         "failed": "Failed",
         "all": "Open the audit journal"
+      },
+      "actions": {
+        "newAccount": "New account"
+      },
+      "quickActions": {
+        "title": "Quick actions",
+        "createAccount": "Create an account",
+        "addSite": "Add a site",
+        "createDatabase": "Create a database",
+        "backups": "Open the backups"
+      },
+      "customerArea": {
+        "title": "Your account",
+        "myAccount": "Open my account",
+        "mySites": "Open my sites",
+        "myDatabases": "Open my databases",
+        "myBackups": "Open my backups"
       }
     }
   }
