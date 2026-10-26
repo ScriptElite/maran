@@ -56,6 +56,11 @@ stop_and_disable_services() {
 remove_systemd_units() {
   echo "Removing systemd units..."
   rm -f /etc/systemd/system/maran-api.service /etc/systemd/system/maran-agent.service
+  # The package-install template (issue #93) is never enabled, so stop_and_disable_services has no
+  # line for it. An instance still running is stopped first so its package manager is not left
+  # orphaned by the removal of its own unit file.
+  systemctl stop 'maran-php-install@*.service' 2>/dev/null || true
+  rm -f /etc/systemd/system/maran-php-install@.service
   # The api's socket directory is built by a tmpfiles snippet rather than by the unit's
   # RuntimeDirectory=, so removing the unit does not remove the directory: both go here.
   # Left behind, the snippet would go on recreating an empty 2710 directory on every boot of a

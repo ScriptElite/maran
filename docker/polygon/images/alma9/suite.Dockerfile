@@ -240,6 +240,9 @@ COPY installer/panel.env.example /tmp/maran-installer/panel.env.example
 COPY installer/systemd/maran-api.service /tmp/maran-installer/systemd/maran-api.service
 COPY installer/systemd/maran-api.tmpfiles.conf /tmp/maran-installer/systemd/maran-api.tmpfiles.conf
 COPY installer/systemd/maran-agent.service /tmp/maran-installer/systemd/maran-agent.service
+# Step 70's install_units renders and installs the package-install template with the units above
+# (issue #93), so it must be here or the step aborts on a missing source and no suite runs.
+COPY installer/systemd/maran-php-install@.service /tmp/maran-installer/systemd/maran-php-install@.service
 COPY installer/lib/70-services.sh /tmp/maran-installer/lib/70-services.sh
 # Step 80 again — the earlier COPY was consumed by the `rm -rf /tmp/maran-installer` that ends
 # the include block above — and step 40 beside it. Both are RUN by the assert script, not read:

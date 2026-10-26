@@ -122,7 +122,8 @@ hand (read: '${observed:-absent}'). A boundary that cannot be repaired by re-run
 operator will widen with chmod instead."
 
   # Leave the image as it was found: this is the only assertion that installs a unit.
-  rm -f /etc/systemd/system/maran-api.service /etc/systemd/system/maran-agent.service
+  rm -f /etc/systemd/system/maran-api.service /etc/systemd/system/maran-agent.service \
+    /etc/systemd/system/maran-php-install@.service
   rm -f /etc/tmpfiles.d/maran-api.conf
   rm -rf "$socket_dir"
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Step 70: install the hardened systemd units from installer/systemd/ and enable them.
+# Step 70: install the systemd units from installer/systemd/ and enable the panel's two.
+# The package-install template unit is installed too, but never enabled: only the agent starts it.
 # Does not start them yet — 80-nginx.sh must install the vhost first so the api's first
 # health check has something proxying to it, and both are started together at the end
 # of this step's counterpart call order in install.sh (api after nginx is configured
@@ -15,6 +16,10 @@ readonly MARAN_UNIT_DIR="/etc/systemd/system"
 # one place.
 readonly MARAN_TMPFILES_DIR="/etc/tmpfiles.d"
 readonly MARAN_API_TMPFILES_NAME="maran-api.conf"
+# The template unit through which the agent installs a PHP version as root, outside its own sandbox
+# (issue #93). The file name is the contract with the agent: ops/src/php starts
+# maran-php-install@<package>.service, so a rename here without one there installs nothing.
+readonly MARAN_PHP_INSTALL_UNIT_NAME="maran-php-install@.service"
 
 # api_socket_directory: the directory half of MARAN_API_SOCKET_PATH.
 #
@@ -135,6 +140,49 @@ render_agent_unit() {
   refuse_unsubstituted_placeholder "$out" maran-agent.service
 }
 
+# render_php_install_unit: renders the package-install template unit for this host's OS family.
+#
+# The two families name different package managers, and a systemd unit interpolates no shell
+# variable, so the family's ExecStart= and Environment= lines are substituted here. Each is ONE fixed
+# argv: an absolute program, fixed options, and %i (the instance, which the agent writes as the
+# adapter's package name) as the last and only package argument. %i is a systemd specifier, not a
+# shell variable, so nothing below touches it. The paths are the ones DistroAdapter::package_manager
+# answers; they are spelled in the unit because systemd needs an absolute path at load time.
+#
+# --no-remove (Debian family) aborts an install that could only proceed by removing another
+# package; dnf removes nothing unless given --allowerasing, which is never passed. The Debian family
+# also sets DEBIAN_FRONTEND=noninteractive on purpose; the RHEL family has no equivalent, so its
+# environment placeholder becomes a comment rather than an empty line.
+#
+# A family other than debian or rhel is a refusal, never a default: a unit rendered for a package
+# manager the host does not have would fail only when an operator first installs a PHP version.
+render_php_install_unit() {
+  local out="$1" exec_start environment
+  : "${MARAN_OS_FAMILY:?must be set by install.sh before this step is sourced}"
+  case "$MARAN_OS_FAMILY" in
+    debian)
+      exec_start="ExecStart=/usr/bin/apt-get install -y --no-remove -- %i"
+      environment="Environment=DEBIAN_FRONTEND=noninteractive"
+      ;;
+    rhel)
+      exec_start="ExecStart=/usr/bin/dnf install -y -- %i"
+      environment="# No debconf on this family, so no frontend variable to set."
+      ;;
+    *)
+      echo "70-services.sh: no package-install unit for OS family '${MARAN_OS_FAMILY}'; aborting." >&2
+      exit 1
+      ;;
+  esac
+  # awk, not sed: the replacement holds `%` and spaces, and sed's `s###` is a portability trap there.
+  # The values are passed with -v, which processes backslash escapes; neither value contains one.
+  awk -v exec_start="$exec_start" -v environment="$environment" '
+    /^__MARAN_PKG_EXEC_START__$/ { print exec_start; next }
+    /^__MARAN_PKG_ENVIRONMENT__$/ { print environment; next }
+    { print }
+  ' "${LIB_DIR}/../systemd/${MARAN_PHP_INSTALL_UNIT_NAME}" > "$out"
+  refuse_unsubstituted_placeholder "$out" "$MARAN_PHP_INSTALL_UNIT_NAME"
+}
+
 install_units() {
   local tmp
   tmp="$(mktemp)"
@@ -145,6 +193,9 @@ install_units() {
   install -m 0644 "$tmp" "${MARAN_TMPFILES_DIR}/${MARAN_API_TMPFILES_NAME}"
   render_agent_unit "$tmp"
   install -m 0644 "$tmp" "${MARAN_UNIT_DIR}/maran-agent.service"
+  # Installed, NEVER enabled: it has no [Install] section and only the agent starts it.
+  render_php_install_unit "$tmp"
+  install -m 0644 "$tmp" "${MARAN_UNIT_DIR}/${MARAN_PHP_INSTALL_UNIT_NAME}"
   rm -f "$tmp"
 }
 

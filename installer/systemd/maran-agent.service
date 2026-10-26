@@ -154,8 +154,13 @@ NoNewPrivileges=true
 # What that trade costs, stated plainly: /etc is no longer protected by this unit.
 # What is still bought: /usr and the boot loader directories stay read-only, so a
 # compromised agent cannot overwrite the system's binaries or libraries, cannot replace
-# its own /usr/local/maran/agent binary, and cannot install a boot-time payload —
-# the persistence routes that survive a reinstall of the panel. Configuration-level
+# its own /usr/local/maran/agent binary, and cannot install a boot-time payload
+# directly — the persistence routes that survive a reinstall of the panel. The one
+# deliberate exception is PHP: the agent can ask PID 1 to start
+# maran-php-install@<package>.service, an UNSANDBOXED package install run as root
+# that is not a validator, so the closed set of six versions is enforced by the agent
+# alone, and a compromised agent could name another package there (--no-remove only
+# refuses removals; the `--` before the instance keeps it from being read as an option). Configuration-level
 # protection for /etc is not attempted by the sandbox; it is enforced upstream instead,
 # by the agent's closed typed command set (no "run this" rpc exists) and by every
 # config write going through render -> temp file -> validate -> atomic rename.
@@ -252,8 +257,8 @@ RuntimeDirectoryMode=0750
 # Paths deliberately NOT listed, so the omission reads as a decision and not an
 # oversight: /var/lib/mysql (db.* rpcs go through the MySQL client protocol, the agent
 # never touches the datadir), /var/www (document roots live under /home), anything
-# under /usr (the agent installs packages through the distro package manager, which
-# runs as its own unprivileged-of-this-sandbox process, not inside ours), and the two
+# under /usr (the agent does not run the package manager: it asks PID 1 to start
+# maran-php-install@<package>.service, whose process runs outside this sandbox), and the two
 # below, each of which is a path this unit ONCE listed:
 #
 #   /var/lib/maran   the PANEL's state root, not the agent's, and it sat in the writable
