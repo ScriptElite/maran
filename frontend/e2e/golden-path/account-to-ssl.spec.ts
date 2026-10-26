@@ -225,7 +225,8 @@ test.describe('the golden path: install, account, site, certificate', () => {
     // The plans are read from the panel, so an empty list here means nothing seeded them — which
     // is worth failing on explicitly, because a fresh installation with no plan cannot create any
     // account at all and the form gives no hint why.
-    await page.getByRole('combobox', { name: 'Plan ID' }).click()
+    // #80: the control is labelled "Plan"; "Plan ID" was the DTO property leaking.
+    await page.getByRole('combobox', { name: 'Plan', exact: true }).click()
     const plans = page.getByRole('option')
     await expect(plans, 'this panel has no plans, so no account can be created').not.toHaveCount(0)
     await plans.first().click()

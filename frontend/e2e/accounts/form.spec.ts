@@ -67,7 +67,10 @@ test('submitting the empty form shows the panel own field messages and sends no 
 
   await expect(page.getByText('Name is required.')).toBeVisible()
   await expect(page.getByText('Primary domain is required.')).toBeVisible()
-  await expect(page.getByText('Plan ID is required.')).toBeVisible()
+  // #80: the control chooses a plan by name, so its label and its error say "Plan", never the DTO
+  // property "Plan ID" (an identifier no operator sees, types or needs).
+  await expect(page.getByText('Choose a plan.')).toBeVisible()
+  await expect(page.getByText('Plan ID')).toHaveCount(0)
   await expect(page.getByText('Owner email is required.')).toBeVisible()
   await expect(page.getByLabel('Name')).toHaveAttribute('aria-invalid', 'true')
   expect(createRequests).toEqual([])
@@ -107,7 +110,7 @@ test('a rejected create renders the backend RFC 7807 detail verbatim and stays o
   await page.goto('/accounts/new')
   await page.getByLabel('Name').fill('alpha')
   await page.getByLabel('Primary domain').fill('alpha.example.com')
-  await page.getByRole('combobox', { name: 'Plan ID' }).click()
+  await page.getByRole('combobox', { name: 'Plan', exact: true }).click()
   await page.getByRole('option', { name: THE_PLAN.displayName, exact: false }).click()
   await page.getByLabel('Owner email').fill('owner@alpha.example.com')
   await page.getByRole('button', { name: 'Create account' }).click()
@@ -128,7 +131,7 @@ test('a valid submission posts the typed values and returns to the list showing 
   await page.goto('/accounts/new')
   await page.getByLabel('Name').fill('alpha')
   await page.getByLabel('Primary domain').fill('alpha.example.com')
-  await page.getByRole('combobox', { name: 'Plan ID' }).click()
+  await page.getByRole('combobox', { name: 'Plan', exact: true }).click()
   await page.getByRole('option', { name: THE_PLAN.displayName, exact: false }).click()
   await page.getByLabel('Owner email').fill('owner@alpha.example.com')
 
@@ -188,7 +191,7 @@ test('every plan the panel offers can actually be clicked, not merely rendered',
   await stubPlans(page, THREE_PLANS)
 
   await page.goto('/accounts/new')
-  await page.getByRole('combobox', { name: 'Plan ID' }).click()
+  await page.getByRole('combobox', { name: 'Plan', exact: true }).click()
 
   for (const plan of THREE_PLANS) {
     const option = page.getByRole('option', { name: plan.displayName, exact: false })
@@ -206,5 +209,5 @@ test('every plan the panel offers can actually be clicked, not merely rendered',
   const last = THREE_PLANS[THREE_PLANS.length - 1]
   await page.getByRole('option', { name: last.displayName, exact: false }).click()
 
-  await expect(page.getByRole('combobox', { name: 'Plan ID' })).toContainText(last.displayName)
+  await expect(page.getByRole('combobox', { name: 'Plan', exact: true })).toContainText(last.displayName)
 })

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * Create-account screen: a form for name, primary domain, plan id and the
+ * Create-account screen: a form for name, primary domain, plan and the
  * account's owner contact address, with client-side validation mirroring the
  * server's
  * `CreateAccountCommandValidator` constraints exactly (same character
@@ -60,7 +60,7 @@ const store = useAccountsStore()
 const name: Ref<string> = ref('')
 /** Current value of the primary domain field. */
 const primaryDomain: Ref<string> = ref('')
-/** Current value of the plan id field. */
+/** Current value of the plan field (the chosen plan's id; the label says "Plan", #80). */
 const planId: Ref<string> = ref('')
 /** Current value of the owner's contact address field. */
 const ownerEmail: Ref<string> = ref('')
@@ -102,7 +102,7 @@ const planIdError: ComputedRef<string | null> = computed(() => {
   }
   // Nothing chosen is the only way this field can be wrong: the options come from the
   // backend, so the value is always one the server issued and needs no shape check.
-  return planId.value.length === 0 ? t('accounts.form.errors.planIdRequired') : null
+  return planId.value.length === 0 ? t('accounts.form.errors.planRequired') : null
 })
 
 /**
@@ -226,11 +226,11 @@ onMounted(loadPlans)
           />
           <UiSelect
             v-model="planId"
-            :label="t('accounts.form.fields.planId')"
+            :label="t('accounts.form.fields.plan')"
             :options="planOptions"
             :error="planIdError"
             required
-            :placeholder="t('accounts.form.placeholders.planId')"
+            :placeholder="t('accounts.form.placeholders.plan')"
           />
           <UiInput
             v-model="ownerEmail"
