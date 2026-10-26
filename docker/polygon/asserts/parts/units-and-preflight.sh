@@ -91,6 +91,62 @@ assert_the_agent_unit_declares_its_writable_roots() {
 }
 
 
+# agent_unit_usr_defect: prints why the agent unit at $1 lets the agent write /usr, and prints
+# nothing when it does not.
+#
+# The agent cannot run a package manager under ProtectSystem=true, and the fix for that is NOT to
+# widen the agent's own sandbox: the install runs in maran-php-install@.service, a separate unit
+# (issue #93). So the agent unit must keep /usr read-only. Two ways to break that, both read here:
+# a ReadWritePaths= token at or under /usr (an optional `-` prefix stripped, because `-/usr/lib` is
+# the same grant), and ProtectSystem= no longer `true`/`yes`/`full`/`strict`.
+agent_unit_usr_defect() {
+  local file="$1" token protect
+  for token in $(grep '^ReadWritePaths=' "$file" | sed 's/^ReadWritePaths=//'); do
+    token="${token#-}"
+    case "$token" in
+      /usr|/usr/*) echo "ReadWritePaths= names ${token}, which makes /usr writable to the agent and to every child it forks"; return 0 ;;
+    esac
+  done
+  protect="$(grep '^ProtectSystem=' "$file" | head -1 | sed 's/^ProtectSystem=//')"
+  case "$protect" in
+    true|yes|full|strict) ;;
+    *) echo "ProtectSystem= is '${protect}', so /usr is not read-only to the agent"; return 0 ;;
+  esac
+  return 0
+}
+
+
+# assert_the_agent_unit_never_makes_usr_writable: the agent keeps the sandbox it has (issue #93).
+#
+# The unit's text only: a drop-in (`systemctl edit`) is invisible to it, and the booted half is
+# `systemctl show -p ReadWritePaths -p ProtectSystem maran-agent` on a real host. What this proves
+# is that no change to the unit FILE re-opens /usr, which is the shortcut that would have fixed the
+# PHP install and given every compromised-agent path a writable system directory. The checker is
+# shown to refuse before the unit is trusted to it.
+assert_the_agent_unit_never_makes_usr_writable() {
+  local work defect
+  work="$(mktemp -d)"
+
+  defect="$(agent_unit_usr_defect "$AGENT_UNIT")"
+  [ -z "$defect" ] \
+    || fail "$(basename "$AGENT_UNIT"): ${defect}. The package install runs in maran-php-install@.service so that the
+agent's own sandbox never has to open /usr."
+
+  sed 's#^\(ReadWritePaths=.*\)$#\1 /usr#' "$AGENT_UNIT" > "${work}/usr-appended.service"
+  [ -n "$(agent_unit_usr_defect "${work}/usr-appended.service")" ] \
+    || fail "the /usr check ACCEPTED a ReadWritePaths= with /usr appended; it guards nothing"
+  sed 's#^\(ReadWritePaths=.*\)$#\1 -/usr/lib#' "$AGENT_UNIT" > "${work}/usr-lib-optional.service"
+  [ -n "$(agent_unit_usr_defect "${work}/usr-lib-optional.service")" ] \
+    || fail "the /usr check ACCEPTED an optional -/usr/lib in ReadWritePaths=; the leading dash is the same grant"
+  sed 's#^ProtectSystem=true#ProtectSystem=false#' "$AGENT_UNIT" > "${work}/protect-off.service"
+  [ -n "$(agent_unit_usr_defect "${work}/protect-off.service")" ] \
+    || fail "the /usr check ACCEPTED ProtectSystem=false; /usr would be writable with no ReadWritePaths= entry at all"
+
+  rm -rf "$work"
+  echo "maran-agent.service leaves /usr read-only (no ReadWritePaths= under /usr, ProtectSystem=true), and the check refused all three planted breaks."
+}
+
+
 # run_preflight_step: runs step 10's code THE WAY install.sh runs it — a plain command in a child
 # shell with `set -euo pipefail`, the step file sourced, and MARAN_PANEL_PORT exported first
 # because the step's `readonly MARAN_REQUIRED_PORTS="${MARAN_PANEL_PORT:?…}"` refuses to be sourced

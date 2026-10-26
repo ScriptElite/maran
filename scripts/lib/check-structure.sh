@@ -1152,6 +1152,30 @@ if [ "$(grep -rl -E '_(accessTokenIssuer|sessionService)\.IssueAsync\(' backend/
   report "scripts/lib/check-structure.sh: check 26 found no session or token minting sites at all, so it is not a statement about them (rules/testing.md)"
 fi
 
+# 27. The agent, the installer and the uninstaller spell the package-install unit the same way.
+#
+# The agent installs a PHP version by starting `maran-php-install@<package>.service`; the installer
+# ships and installs the template `maran-php-install@.service`; the uninstaller removes it. Four
+# spellings of one name, in two languages and three files, and a drift in any one is silent: a
+# renamed template leaves the agent asking systemd for a unit that does not exist, so every PHP
+# install fails on a real host while each side is green on its own (issue #93).
+#
+# The agent's side is read from the string constant in ops/src/php/install_php_version.rs, so this
+# check follows a rename there instead of holding a fifth copy of the name.
+php_unit_rust="agent/crates/ops/src/php/install_php_version.rs"
+php_unit_prefix="$(sed -n 's/^const INSTALL_UNIT_PREFIX: &str = "\(.*\)";$/\1/p' "$php_unit_rust" 2>/dev/null | head -1)"
+if [ -z "$php_unit_prefix" ]; then
+  report "scripts/lib/check-structure.sh: check 27 could not read INSTALL_UNIT_PREFIX from ${php_unit_rust}, so it is not a statement about the package-install unit's name (rules/testing.md)"
+else
+  php_unit_template="${php_unit_prefix}.service"
+  [ -f "installer/systemd/${php_unit_template}" ] \
+    || report "installer/systemd/${php_unit_template}: missing, but the agent starts '${php_unit_prefix}<package>.service' (${php_unit_rust}) — every PHP version install would fail on a real host (issue #93)"
+  grep -q "^readonly MARAN_PHP_INSTALL_UNIT_NAME=\"${php_unit_template}\"\$" installer/lib/70-services.sh 2>/dev/null \
+    || report "installer/lib/70-services.sh: MARAN_PHP_INSTALL_UNIT_NAME is not '${php_unit_template}', the template the agent's '${php_unit_prefix}' prefix names — the installer would install a unit the agent never starts (issue #93)"
+  grep -q "rm -f /etc/systemd/system/${php_unit_template}\$" installer/uninstall.sh 2>/dev/null \
+    || report "installer/uninstall.sh: does not remove /etc/systemd/system/${php_unit_template}, which the installer drops — an uninstall would leave an unmanaged root package-install unit behind (issue #93)"
+fi
+
 if [ "$violations" -gt 0 ]; then
   echo
   echo "$violations structural violation(s). See rules/ for the rule each one cites."
