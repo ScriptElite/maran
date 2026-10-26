@@ -1,6 +1,11 @@
 # Committed per-target test baseline. Recorded by 'maran test --accept'; commit the diff.
 # stack<TAB>target<TAB>passed<TAB>failed<TAB>ignored
 #
+# RE-MEASURED 2026-10-27 after rebasing on #84: rust 29 targets, 2044 passed / 0 failed / 127 ignored, TEST VERDICT OK; maran_ops 1263.
+# RE-MEASURED 2026-10-26 (issue #93, PHP package install unit): rust 2008/0/117 (28 targets), `maran test rust` found
+# one finding, the new target php_install_rpc, and no failure. Rose, none fell: maran_agent 321->324,
+# php_install_rpc NEW at 6, maran_agent_core 353->356, maran_distro 40->42, maran_ops 1233->1252.
+# (The accept path rewrites this file from the run alone; the prose below was restored from the committed version.)
 # RE-MEASURED 2026-10-26 (issue #84, nginx symlink rule): rust rows now sum to 2019/0/127 over 28 targets (the run collected 2024 passed: five other rows already ran above their recorded count, and gaining is silent), from a `maran test rust`
 # run printing `28 targets: 2024 passed / 0 failed / 127 ignored`. Edited by hand, not `--accept`. Rows
 # that moved: maran_ops 1233->1252, maran_templates 0->13, golden_test 19->22, sites_on_a_real_host
@@ -237,7 +242,7 @@
 # The header above was regenerated away by 'maran test spa --accept' and is restored here by
 # hand: the accept path rewrites this file from the run alone and keeps no prose, so every
 # re-measurement note in it is one --accept away from being lost. Worth fixing in the script.
-rust	maran_agent [unittests src/lib.rs]	321	0	0
+rust	maran_agent [unittests src/lib.rs]	324	0	0
 rust	maran_agent [unittests src/main.rs]	0	0	0
 rust	account_deletion_on_a_real_host [tests/account_deletion_on_a_real_host.rs]	0	0	5
 rust	backup_on_a_real_host [tests/backup_on_a_real_host.rs]	0	0	12
@@ -248,15 +253,16 @@ rust	firewall_on_a_real_host [tests/firewall_on_a_real_host.rs]	0	0	10
 rust	ftps_on_a_real_host [tests/ftps_on_a_real_host.rs]	0	0	15
 rust	handshake [tests/handshake.rs]	6	0	0
 rust	monitor_on_a_real_host [tests/monitor_on_a_real_host.rs]	0	0	8
+rust	php_install_rpc [tests/php_install_rpc.rs]	6	0	0
 rust	php_pools_on_a_real_host [tests/php_pools_on_a_real_host.rs]	0	0	3
 rust	privileges_on_a_real_host [tests/privileges_on_a_real_host.rs]	0	0	15
 rust	restore_recovery_on_a_real_host [tests/restore_recovery_on_a_real_host.rs]	0	0	4
 rust	sftp_on_a_real_host [tests/sftp_on_a_real_host.rs]	0	0	13
 rust	shutdown_signal [tests/shutdown_signal.rs]	3	0	0
 rust	sites_on_a_real_host [tests/sites_on_a_real_host.rs]	0	0	26
-rust	maran_agent_core [unittests src/lib.rs]	353	0	0
-rust	maran_distro [unittests src/lib.rs]	40	0	0
-rust	maran_ops [unittests src/lib.rs]	1252	0	1
+rust	maran_agent_core [unittests src/lib.rs]	356	0	0
+rust	maran_distro [unittests src/lib.rs]	42	0	0
+rust	maran_ops [unittests src/lib.rs]	1263	0	1
 rust	maran_templates [unittests src/lib.rs]	13	0	0
 rust	golden_test [tests/golden_test.rs]	22	0	0
 rust	nginx_link_rule_test [tests/nginx_link_rule_test.rs]	9	0	0
