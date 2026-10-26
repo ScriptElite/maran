@@ -11,7 +11,29 @@ Type=simple
 # to create/modify OS users, write system service configs and manage services on the
 # api's behalf. Its own operations then drop to the target account's UID for any
 # customer file I/O (fork + setuid, done in-process, not by this unit).
-User=root
+#
+# `User=root` IS NOT WRITTEN HERE, and its absence is the fix for issue #81 rather than an
+# omission. A system service already runs as root when no User= is given, so the directive
+# changed nothing about the identity — but writing it sent systemd down its user-SWITCHING path,
+# and a service that has switched user comes out the other side without CAP_SETUID in its
+# permitted set. The bounding set still listed the capability, which is why this was invisible:
+#
+#     CapBnd: 00000000202014eb   <- cap_setuid present, as the unit asks
+#     CapEff: 000000002020146b   <- cap_setuid absent, as the process actually ran
+#
+# The effect was that NO work could be done as a hosting account at all. `setgroups` and
+# `setgid` succeeded, `setuid` was refused, and every site creation answered 500 — uid 0 alone
+# has not been enough to change uid since capabilities replaced the all-powerful root check.
+#
+# Measured on Ubuntu 24.04 by taking the unit's own directives and removing one at a time:
+# only the removal of `User=root` or of `NoNewPrivileges=` brought cap_setuid back, and the two
+# together are what lose it. With it gone the agent still runs as uid 0, the capability is
+# present, and a site's document root is created owned by the account rather than by root.
+#
+# AmbientCapabilities=CAP_SETUID was considered and REFUSED: ambient capabilities survive
+# `setuid` on purpose, so the child that has dropped to the customer would keep CAP_SETUID and
+# could return to root. That is precisely the isolation `fork_as_account` exists to create, and
+# `privileges_on_a_real_host.rs` asserts a dropped child cannot regain root.
 # The service group, on a root process: the socket the agent creates inherits the process's
 # group, which is what actually grants maran-api (which runs as that account) access to it.
 # Without this the socket is root:root and the API cannot connect at all — the 0660 mode below
