@@ -1,6 +1,11 @@
 # Committed per-target test baseline. Recorded by 'maran test --accept'; commit the diff.
 # stack<TAB>target<TAB>passed<TAB>failed<TAB>ignored
 #
+# RE-MEASURED 2026-10-26 (issue #84, nginx symlink rule): rust rows now sum to 2019/0/127 over 28 targets (the run collected 2024 passed: five other rows already ran above their recorded count, and gaining is silent), from a `maran test rust`
+# run printing `28 targets: 2024 passed / 0 failed / 127 ignored`. Edited by hand, not `--accept`. Rows
+# that moved: maran_ops 1233->1252, maran_templates 0->13, golden_test 19->22, sites_on_a_real_host
+# ignored 16->26 (the polygon link tests); NEW row nginx_link_rule_test 9. NOTHING FELL. backend and spa unchanged.
+#
 # RE-MEASURED 2026-10-26 (issues #78, #79, #80): rust 1975/0/117, backend 3435/0/0, spa 593/0/1. Backend and spa
 # re-recorded (`maran test backend --accept`, `maran test spa --accept`); rust unchanged. Rows ROSE,
 # none fell: Accounts.Tests and Identity.Tests gained the plan create/update/delete and invitation-link
@@ -248,12 +253,13 @@ rust	privileges_on_a_real_host [tests/privileges_on_a_real_host.rs]	0	0	15
 rust	restore_recovery_on_a_real_host [tests/restore_recovery_on_a_real_host.rs]	0	0	4
 rust	sftp_on_a_real_host [tests/sftp_on_a_real_host.rs]	0	0	13
 rust	shutdown_signal [tests/shutdown_signal.rs]	3	0	0
-rust	sites_on_a_real_host [tests/sites_on_a_real_host.rs]	0	0	16
+rust	sites_on_a_real_host [tests/sites_on_a_real_host.rs]	0	0	26
 rust	maran_agent_core [unittests src/lib.rs]	353	0	0
 rust	maran_distro [unittests src/lib.rs]	40	0	0
-rust	maran_ops [unittests src/lib.rs]	1233	0	1
-rust	maran_templates [unittests src/lib.rs]	0	0	0
-rust	golden_test [tests/golden_test.rs]	19	0	0
+rust	maran_ops [unittests src/lib.rs]	1252	0	1
+rust	maran_templates [unittests src/lib.rs]	13	0	0
+rust	golden_test [tests/golden_test.rs]	22	0	0
+rust	nginx_link_rule_test [tests/nginx_link_rule_test.rs]	9	0	0
 rust	doc-tests maran_agent	0	0	0
 rust	doc-tests maran_agent_core	0	0	0
 rust	doc-tests maran_distro	0	0	0
