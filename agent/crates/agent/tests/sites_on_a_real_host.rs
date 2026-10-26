@@ -34,6 +34,7 @@ use maran_agent_core::validation::fs::file_mode::FileMode;
 use maran_agent_core::validation::fs::relative_path::RelativePath;
 use maran_agent_core::validation::web::domain::Domain;
 use maran_agent_core::validation::web::php_version::PhpVersion;
+use maran_agent_core::validation::web::upstream::Upstream;
 use maran_distro::{DistroAdapter, adapter_for, detect};
 use maran_ops::files::{ProcessFilesHost, WriteFileInput};
 use maran_ops::php::ProcessPhpHost;
@@ -1748,6 +1749,695 @@ fn installing_a_certificate_on_a_suspended_site_leaves_the_real_nginx_serving_th
     assert!(
         !after.contains(SUSPENDED_ACCOUNT_BODY),
         "a certificate renewal must not put a suspended customer's page back on the air:\n{after}"
+    );
+
+    maran_ops::ssl::purge_certificate(&ssl_host, polygon_distro(), &domain);
+}
+
+// ---------------------------------------------------------------------------
+// Symbolic links a customer plants in a site's own tree (#84).
+//
+// The web server can enter every account's home and a customer can link to any
+// path, so without `disable_symlinks if_not_owner;` a link in one site's root
+// served another account's files. Every refusal below runs three controls in
+// the same run, so a refusal cannot be mistaken for a site that was never
+// served, or for a secret nobody could read:
+//   (c1) the attacking account's own file is served;
+//   (c2) the victim's file IS served on the victim's own site, so the web
+//        server can read it and a refusal comes from the link rule;
+//   (c3) nginx's own error log names the refused path with ELOOP.
+//
+// Stated blind spot: these requests are plain HTTP on port 80. The 443 block of
+// a site with a certificate is held by `php_site_ssl.conf` and the other
+// goldens, not over the wire: the suite has no TLS client.
+// ---------------------------------------------------------------------------
+
+/// The bytes of the victim's private file. A refusal must never contain them.
+const LINK_SECRET: &str = "maran-bob-private-credentials";
+
+/// The bytes of the attacking account's own file, the positive control.
+const LINK_OWN_BODY: &str = "maran-alice-own-page";
+
+/// What nginx's error log says about a path it refused because of a link.
+const REFUSED_LINK_LOG: &str = "(40: Too many levels of symbolic links)";
+
+/// Two accounts, each with a site: `alice` the attacker and `bob` the victim.
+///
+/// Bob's document root holds `wp-config.php` with [`LINK_SECRET`], written as
+/// bob and readable by the web server, which is the reproduction of the issue.
+/// Alice's root holds `alice.txt`, a file any kind of site serves. Fields drop
+/// in declaration order, so the config files go before the accounts do.
+struct LinkFixture {
+    /// Takes alice's vhost away again.
+    _alice_vhost: PolygonConfigFile,
+    /// Takes bob's vhost away again.
+    _bob_vhost: PolygonConfigFile,
+    /// Takes alice's php-fpm pool away again, when her site is a PHP one.
+    _alice_pool: Option<PolygonConfigFile>,
+    /// The account that plants links.
+    alice: PolygonAccount,
+    /// The account whose files a link must not reach.
+    bob: PolygonAccount,
+    /// Alice's site name.
+    alice_domain: Domain,
+    /// Bob's site name.
+    bob_domain: Domain,
+    /// The input alice's site was created from.
+    alice_input: CreateSiteInput,
+}
+
+impl LinkFixture {
+    /// Creates both accounts and both sites, named by `tag`, which must be
+    /// unique per test and at most a few letters.
+    ///
+    /// `php` makes alice's site a PHP one; bob's is always static, because a
+    /// static site serves his file as plain bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics outside a polygon, or when an account or a site cannot be made.
+    fn new(tag: &str, php: bool) -> Self {
+        PolygonAccount::require_polygon();
+        ensure_nginx_is_running();
+        let alice = PolygonAccount::create(&format!("polylka{tag}"));
+        let bob = PolygonAccount::create(&format!("polylkb{tag}"));
+        let alice_domain =
+            Domain::parse(&format!("alice{tag}.example.test")).expect("a valid domain");
+        let bob_domain = Domain::parse(&format!("bob{tag}.example.test")).expect("a valid domain");
+
+        let alice_input = if php {
+            php_site(&alice, &alice_domain)
+        } else {
+            served_site_input(&alice, &alice_domain)
+        };
+        let alice_pool = php.then(|| pool_guard(&alice));
+        create_polygon_site(&ProcessSiteHost::new(), &alice_input)
+            .unwrap_or_else(|error| panic!("creating alice's site must succeed: {error}"));
+        let alice_vhost =
+            PolygonConfigFile::at(&SitePaths::for_site(alice.name(), &alice_domain).config_path);
+
+        create_polygon_site(
+            &ProcessSiteHost::new(),
+            &served_site_input(&bob, &bob_domain),
+        )
+        .unwrap_or_else(|error| panic!("creating bob's site must succeed: {error}"));
+        let bob_vhost =
+            PolygonConfigFile::at(&SitePaths::for_site(bob.name(), &bob_domain).config_path);
+
+        write_as_account(
+            &alice,
+            &format!("sites/{}/alice.txt", alice_domain.as_str()),
+            LINK_OWN_BODY,
+        );
+        write_as_account(
+            &bob,
+            &format!("sites/{}/wp-config.php", bob_domain.as_str()),
+            LINK_SECRET,
+        );
+
+        Self {
+            _alice_vhost: alice_vhost,
+            _bob_vhost: bob_vhost,
+            _alice_pool: alice_pool,
+            alice,
+            bob,
+            alice_domain,
+            bob_domain,
+            alice_input,
+        }
+    }
+
+    /// Alice's document root.
+    fn alice_root(&self) -> std::path::PathBuf {
+        SitePaths::for_site(self.alice.name(), &self.alice_domain).document_root
+    }
+
+    /// Bob's document root.
+    fn bob_root(&self) -> std::path::PathBuf {
+        SitePaths::for_site(self.bob.name(), &self.bob_domain).document_root
+    }
+
+    /// The absolute path of bob's private file.
+    fn secret_path(&self) -> String {
+        self.bob_root()
+            .join("wp-config.php")
+            .to_str()
+            .expect("the path is UTF-8")
+            .to_owned()
+    }
+
+    /// Alice's site error log.
+    fn alice_error_log(&self) -> std::path::PathBuf {
+        SitePaths::for_site(self.alice.name(), &self.alice_domain).error_log
+    }
+
+    /// Reloads nginx and proves controls (c1) and (c2): alice's own file is
+    /// served, and so is bob's secret on bob's own site.
+    ///
+    /// # Panics
+    ///
+    /// Panics when either control fails, which means the setup is wrong and a
+    /// refusal measured afterwards would measure nothing.
+    fn assert_controls(&self) {
+        reload_polygon_nginx();
+
+        let own = fetch_until(self.alice_domain.as_str(), "/alice.txt", |body| {
+            body.contains(LINK_OWN_BODY)
+        });
+        assert!(
+            own.starts_with("HTTP/1.1 200 ") && own.contains(LINK_OWN_BODY),
+            "control c1: the attacker's own file must be served, or no refusal means anything:\n{own}"
+        );
+
+        let secret = fetch_until(self.bob_domain.as_str(), "/wp-config.php", |body| {
+            body.contains(LINK_SECRET)
+        });
+        assert!(
+            secret.starts_with("HTTP/1.1 200 ") && secret.contains(LINK_SECRET),
+            "control c2: the web server must be able to read the victim's file on the \
+             victim's own site, or a refusal could be a permission bit:\n{secret}"
+        );
+    }
+
+    /// Asks alice's site for `path` and fails the test unless nginx answered
+    /// `status` without the victim's bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a different status or when the secret is in the response.
+    fn assert_refused(&self, path: &str, status: &str) {
+        let response = fetch(self.alice_domain.as_str(), path);
+
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {status} ")),
+            "a link out of alice's tree must answer {status} for {path}:\n{response}"
+        );
+        assert!(
+            !response.contains(LINK_SECRET),
+            "a link out of alice's tree served bob's private file for {path}:\n{response}"
+        );
+    }
+}
+
+/// Renames `from` to `to` as the account, through the agent's own privilege
+/// drop, like [`symlink_as_account`]: what this proves is what an unprivileged
+/// customer can do with a shell, since the directories above a document root
+/// belong to the customer.
+///
+/// # Panics
+///
+/// Panics when the drop or the `rename` call fails.
+fn rename_as_account(account: &PolygonAccount, from: std::path::PathBuf, to: std::path::PathBuf) {
+    let ids = account.ids();
+    let renamed = within("the customer's rename", move || {
+        fork_as_account(&ids, || {
+            std::fs::rename(&from, &to).map_err(|_| PrivError::WorkFailed)
+        })
+    });
+
+    renamed.expect("an unprivileged account can always rename inside its own home");
+}
+
+/// Reads `path` until it contains `needle` or the deadline passes, returning
+/// whatever it last saw.
+///
+/// Bounded and non-panicking for the reason [`read_until_non_empty`] is: a
+/// missing line must produce the assertion at the call site with the log
+/// printed, not a timeout message.
+fn read_until_contains(path: &Path, needle: &str) -> String {
+    let deadline = std::time::Instant::now() + LOG_DEADLINE;
+    let mut last = std::fs::read_to_string(path).unwrap_or_default();
+
+    while !last.contains(needle) && std::time::Instant::now() < deadline {
+        std::thread::sleep(SERVE_POLL_INTERVAL);
+        last = std::fs::read_to_string(path).unwrap_or_default();
+    }
+
+    last
+}
+
+#[test]
+#[ignore = "plants real symlinks as real accounts and asks a real nginx for them: polygon only"]
+fn a_link_from_a_static_site_to_another_accounts_file_is_not_served() {
+    // The issue's reproduction: the secret is 0644 in bob's own root, alice
+    // links to it from hers. The 404 is what `try_files` makes of a refused
+    // open; it is not the 403 the issue named, and the body check is what says
+    // the bytes did not leave.
+    let fixture = LinkFixture::new("one", false);
+    symlink_as_account(
+        &fixture.alice,
+        &fixture.secret_path(),
+        fixture.alice_root().join("leak.txt"),
+    );
+    fixture.assert_controls();
+
+    fixture.assert_refused("/leak.txt", "404");
+
+    // (c3) the server's own word, which is also what tells a refused link from
+    // a permission error: EACCES here would mean the setup is wrong.
+    let log = read_until_contains(&fixture.alice_error_log(), REFUSED_LINK_LOG);
+    assert!(
+        log.contains(REFUSED_LINK_LOG) && log.contains("leak.txt"),
+        "control c3: the error log must name the refused link with ELOOP:\n{log}"
+    );
+}
+
+#[test]
+#[ignore = "plants a real symlink as a real account and asks a real nginx for it: polygon only"]
+fn a_link_from_a_static_site_to_a_host_file_is_not_served() {
+    let fixture = LinkFixture::new("two", false);
+    symlink_as_account(
+        &fixture.alice,
+        "/etc/passwd",
+        fixture.alice_root().join("passwd.txt"),
+    );
+    fixture.assert_controls();
+
+    let response = fetch(fixture.alice_domain.as_str(), "/passwd.txt");
+
+    assert!(
+        response.starts_with("HTTP/1.1 404 "),
+        "a link to a host file must answer 404:\n{response}"
+    );
+    assert!(
+        !response.contains("root:x:0:0"),
+        "a customer's link served the host's /etc/passwd:\n{response}"
+    );
+}
+
+#[test]
+#[ignore = "plants a real symlink as a real account and asks a real nginx for it: polygon only"]
+fn a_directory_link_into_another_home_is_not_followed() {
+    // A directory link, not a file link: the check walks every component of the
+    // request path, so a link in the middle of it is refused too.
+    let fixture = LinkFixture::new("three", false);
+    symlink_as_account(
+        &fixture.alice,
+        fixture.bob.home().to_str().expect("the path is UTF-8"),
+        fixture.alice_root().join("bobhome"),
+    );
+    fixture.assert_controls();
+
+    fixture.assert_refused(
+        &format!(
+            "/bobhome/sites/{}/wp-config.php",
+            fixture.bob_domain.as_str()
+        ),
+        "404",
+    );
+}
+
+#[test]
+#[ignore = "plants real symlinks as a real account and asks a real nginx for them: polygon only"]
+fn a_customers_links_to_their_own_files_are_still_served() {
+    // The inverse of the refusals above, and what keeps normal sites working:
+    // a link whose owner is the owner of its target is followed, wherever the
+    // target lives in the customer's own home.
+    let fixture = LinkFixture::new("four", false);
+    write_as_account(&fixture.alice, "notes.txt", LINK_OWN_BODY);
+    write_as_account(
+        &fixture.alice,
+        &format!("sites/{}/real.txt", fixture.alice_domain.as_str()),
+        LINK_OWN_BODY,
+    );
+    symlink_as_account(
+        &fixture.alice,
+        "real.txt",
+        fixture.alice_root().join("mine.txt"),
+    );
+    symlink_as_account(
+        &fixture.alice,
+        fixture
+            .alice
+            .home()
+            .join("notes.txt")
+            .to_str()
+            .expect("the path is UTF-8"),
+        fixture.alice_root().join("outside.txt"),
+    );
+    fixture.assert_controls();
+
+    for path in ["/mine.txt", "/outside.txt"] {
+        let response = fetch_until(fixture.alice_domain.as_str(), path, |body| {
+            body.contains(LINK_OWN_BODY)
+        });
+        assert!(
+            response.starts_with("HTTP/1.1 200 ") && response.contains(LINK_OWN_BODY),
+            "a customer's link to their own file must still be served, {path}:\n{response}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "renames and links as a real account and asks a real nginx: polygon only"]
+fn a_document_root_swapped_for_a_link_to_another_accounts_root_is_not_served() {
+    // Why the rule has no `from=`. The customer owns `sites/` and everything
+    // above it, so they can move their document root aside and put a link to
+    // another account's root in its place. A rule that starts checking at the
+    // root would open that link without looking at it.
+    let fixture = LinkFixture::new("five", false);
+    let root = fixture.alice_root();
+    let aside = root.with_file_name(format!("{}.old", fixture.alice_domain.as_str()));
+    rename_as_account(&fixture.alice, root.clone(), aside);
+    symlink_as_account(
+        &fixture.alice,
+        fixture.bob_root().to_str().expect("the path is UTF-8"),
+        root,
+    );
+    reload_polygon_nginx();
+
+    // Controls c1 and c2 cannot use alice's own file here, because her root is
+    // now the swapped link; c2 and the refusal itself are what this asks.
+    let secret = fetch_until(fixture.bob_domain.as_str(), "/wp-config.php", |body| {
+        body.contains(LINK_SECRET)
+    });
+    assert!(
+        secret.starts_with("HTTP/1.1 200 ") && secret.contains(LINK_SECRET),
+        "control c2: bob's own site must serve his file:\n{secret}"
+    );
+
+    fixture.assert_refused("/wp-config.php", "404");
+
+    // The inverse control: a root swapped for a link to ANOTHER DIRECTORY OF
+    // HER OWN is followed, because the link and its target share an owner.
+    let own_target = fixture.alice.home().join("sites").join("own-target");
+    write_as_account(&fixture.alice, "sites/own-target/alice.txt", LINK_OWN_BODY);
+    let second_domain = Domain::parse("alicefive-two.example.test").expect("a valid domain");
+    let second_paths = SitePaths::for_site(fixture.alice.name(), &second_domain);
+    create_polygon_site(
+        &ProcessSiteHost::new(),
+        &served_site_input(&fixture.alice, &second_domain),
+    )
+    .unwrap_or_else(|error| panic!("the second site must be created: {error}"));
+    let _second_vhost = PolygonConfigFile::at(&second_paths.config_path);
+    rename_as_account(
+        &fixture.alice,
+        second_paths.document_root.clone(),
+        second_paths
+            .document_root
+            .with_file_name("alicefive-two.example.test.old"),
+    );
+    symlink_as_account(
+        &fixture.alice,
+        own_target.to_str().expect("the path is UTF-8"),
+        second_paths.document_root,
+    );
+    reload_polygon_nginx();
+
+    let own = fetch_until(second_domain.as_str(), "/alice.txt", |body| {
+        body.contains(LINK_OWN_BODY)
+    });
+    assert!(
+        own.starts_with("HTTP/1.1 200 ") && own.contains(LINK_OWN_BODY),
+        "a root swapped for a link to the customer's own directory must still be served:\n{own}"
+    );
+}
+
+#[test]
+#[ignore = "plants a real symlink as a real account and asks a real nginx for it: polygon only"]
+fn a_link_in_the_challenge_directory_of_a_site_with_a_certificate_is_refused() {
+    // With a certificate the port-80 block holds only the challenge location
+    // and the redirect, so that location's own rule is the only one there. The
+    // challenge location has no `try_files`, so a refusal is nginx's 403.
+    let fixture = LinkFixture::new("six", false);
+    // Controls c1 and c2 are asked BEFORE the certificate lands: afterwards
+    // port 80 redirects everything but the challenge directory.
+    fixture.assert_controls();
+    let ssl_host = ProcessSslHost::new();
+    generate_self_signed(&ssl_host, polygon_distro(), &fixture.alice_input)
+        .unwrap_or_else(|error| panic!("issuing material for alice's site must succeed: {error}"));
+
+    write_as_account(
+        &fixture.alice,
+        &format!(
+            "sites/{}/.well-known/acme-challenge/{ACME_TOKEN}",
+            fixture.alice_domain.as_str()
+        ),
+        ACME_TOKEN_BODY,
+    );
+    symlink_as_account(
+        &fixture.alice,
+        &fixture.secret_path(),
+        fixture
+            .alice_root()
+            .join(".well-known")
+            .join("acme-challenge")
+            .join("leak"),
+    );
+    reload_polygon_nginx();
+
+    // The control that this block really is the certificate one: the site root
+    // redirects to HTTPS.
+    let redirect = fetch_until(fixture.alice_domain.as_str(), "/", |body| {
+        body.starts_with("HTTP/1.1 301 ")
+    });
+    assert!(
+        redirect.starts_with("HTTP/1.1 301 "),
+        "port 80 of a site with a certificate must redirect, or this probe is not on that block:\n{redirect}"
+    );
+
+    let token = fetch(
+        fixture.alice_domain.as_str(),
+        &format!("/.well-known/acme-challenge/{ACME_TOKEN}"),
+    );
+    assert!(
+        token.starts_with("HTTP/1.1 200 ") && token.contains(ACME_TOKEN_BODY),
+        "the real challenge file must still be answered:\n{token}"
+    );
+
+    fixture.assert_refused("/.well-known/acme-challenge/leak", "403");
+
+    maran_ops::ssl::purge_certificate(&ssl_host, polygon_distro(), &fixture.alice_domain);
+}
+
+#[test]
+#[ignore = "plants a real symlink as a real account and asks a real nginx for it: polygon only"]
+fn a_link_in_a_suspended_sites_challenge_directory_is_refused() {
+    // The stub's challenge location serves a customer's tree while the rest of
+    // the site answers the refusal, so a link there is as open as anywhere.
+    let fixture = LinkFixture::new("seven", false);
+    write_as_account(
+        &fixture.alice,
+        &format!(
+            "sites/{}/.well-known/acme-challenge/{ACME_TOKEN}",
+            fixture.alice_domain.as_str()
+        ),
+        ACME_TOKEN_BODY,
+    );
+    symlink_as_account(
+        &fixture.alice,
+        &fixture.secret_path(),
+        fixture
+            .alice_root()
+            .join(".well-known")
+            .join("acme-challenge")
+            .join("leak"),
+    );
+    fixture.assert_controls();
+
+    maran_ops::sites::disable_site(
+        &ProcessSiteHost::new(),
+        polygon_distro(),
+        &fixture.alice_input,
+    )
+    .unwrap_or_else(|error| panic!("suspending alice's site must succeed: {error}"));
+    reload_polygon_nginx();
+
+    // The suspension is observed live first, so what follows is asked of the
+    // stub and not of the vhost the workers still held.
+    let root = fetch_until(fixture.alice_domain.as_str(), "/", |body| {
+        body.contains(SUSPENSION_NOTICE)
+    });
+    assert!(
+        root.starts_with("HTTP/1.1 403 ") && root.contains(SUSPENSION_NOTICE),
+        "the stub must be live before the challenge proves anything:\n{root}"
+    );
+
+    let token = fetch(
+        fixture.alice_domain.as_str(),
+        &format!("/.well-known/acme-challenge/{ACME_TOKEN}"),
+    );
+    assert!(
+        token.starts_with("HTTP/1.1 200 ") && token.contains(ACME_TOKEN_BODY),
+        "a suspended site must still answer its own challenge file:\n{token}"
+    );
+
+    fixture.assert_refused("/.well-known/acme-challenge/leak", "403");
+}
+
+#[test]
+#[ignore = "plants a real symlink as a real account and asks a real nginx for it: polygon only"]
+fn a_link_in_a_proxy_sites_challenge_directory_is_refused() {
+    // A proxied site opens no file except in its challenge location, which is
+    // therefore the only link rule that site has.
+    PolygonAccount::require_polygon();
+    ensure_nginx_is_running();
+    let alice = PolygonAccount::create("polylkaeight");
+    let bob = PolygonAccount::create("polylkbeight");
+    let proxy_domain = Domain::parse("proxyeight.example.test").expect("a valid domain");
+    let bob_domain = Domain::parse("bobeight.example.test").expect("a valid domain");
+
+    // The upstream is a port nothing listens on: only the challenge location is
+    // asked for, and a request to `/` would be a 502 that proves nothing.
+    let input = CreateSiteInput {
+        account: alice.name().clone(),
+        domain: proxy_domain.clone(),
+        aliases: Vec::new(),
+        kind: SiteKind::ReverseProxy {
+            upstream: Upstream::parse("127.0.0.1:9").expect("a valid upstream"),
+        },
+        certificate: None,
+    };
+    create_polygon_site(&ProcessSiteHost::new(), &input)
+        .unwrap_or_else(|error| panic!("creating a proxy site must succeed: {error}"));
+    let _proxy_vhost =
+        PolygonConfigFile::at(&SitePaths::for_site(alice.name(), &proxy_domain).config_path);
+    create_polygon_site(
+        &ProcessSiteHost::new(),
+        &served_site_input(&bob, &bob_domain),
+    )
+    .unwrap_or_else(|error| panic!("creating bob's site must succeed: {error}"));
+    let _bob_vhost =
+        PolygonConfigFile::at(&SitePaths::for_site(bob.name(), &bob_domain).config_path);
+
+    write_as_account(
+        &bob,
+        &format!("sites/{}/wp-config.php", bob_domain.as_str()),
+        LINK_SECRET,
+    );
+    write_as_account(
+        &alice,
+        &format!(
+            "sites/{}/.well-known/acme-challenge/{ACME_TOKEN}",
+            proxy_domain.as_str()
+        ),
+        ACME_TOKEN_BODY,
+    );
+    let secret_path = SitePaths::for_site(bob.name(), &bob_domain)
+        .document_root
+        .join("wp-config.php");
+    symlink_as_account(
+        &alice,
+        secret_path.to_str().expect("the path is UTF-8"),
+        SitePaths::for_site(alice.name(), &proxy_domain)
+            .document_root
+            .join(".well-known")
+            .join("acme-challenge")
+            .join("leak"),
+    );
+    reload_polygon_nginx();
+
+    let secret = fetch_until(bob_domain.as_str(), "/wp-config.php", |body| {
+        body.contains(LINK_SECRET)
+    });
+    assert!(
+        secret.starts_with("HTTP/1.1 200 ") && secret.contains(LINK_SECRET),
+        "control c2: the web server must be able to read the victim's file:\n{secret}"
+    );
+    let token = fetch_until(
+        proxy_domain.as_str(),
+        &format!("/.well-known/acme-challenge/{ACME_TOKEN}"),
+        |body| body.contains(ACME_TOKEN_BODY),
+    );
+    assert!(
+        token.starts_with("HTTP/1.1 200 ") && token.contains(ACME_TOKEN_BODY),
+        "control c1: the proxied site's own challenge file must be answered:\n{token}"
+    );
+
+    let response = fetch(proxy_domain.as_str(), "/.well-known/acme-challenge/leak");
+    assert!(
+        response.starts_with("HTTP/1.1 403 "),
+        "a link in a proxied site's challenge directory must answer 403:\n{response}"
+    );
+    assert!(
+        !response.contains(LINK_SECRET),
+        "a proxied site's challenge location served another account's file:\n{response}"
+    );
+}
+
+#[test]
+#[ignore = "plants real symlinks as a real account and asks a real php site: polygon only"]
+fn a_link_from_a_php_site_into_another_home_is_not_served() {
+    // No `index.php` in the root, so nothing the fall-through reaches can run:
+    // a refused link ends at the `.php` location's `try_files $uri =404`, and a
+    // refused plain file at the fall-through to the same 404. php-fpm need not
+    // be reachable for either.
+    let fixture = LinkFixture::new("nine", true);
+    symlink_as_account(
+        &fixture.alice,
+        &fixture.secret_path(),
+        fixture.alice_root().join("leak.txt"),
+    );
+    symlink_as_account(
+        &fixture.alice,
+        &fixture.secret_path(),
+        fixture.alice_root().join("leak.php"),
+    );
+    fixture.assert_controls();
+
+    fixture.assert_refused("/leak.txt", "404");
+    fixture.assert_refused("/leak.php", "404");
+}
+
+#[test]
+#[ignore = "writes a real suspended vhost and real certificate material: polygon only"]
+fn a_site_suspended_before_the_upgrade_stays_suspended_through_a_certificate_install() {
+    // The stub an agent wrote before the challenge location carried its link
+    // rule is recognised by comparing bytes, so adding the rule to the stub
+    // must not make every stub already on disk read as an ordinary site: the
+    // next unattended renewal would put the suspended customer's page back on
+    // the air. The previous stub is the current one with that one line taken
+    // out, which is exactly what the released agents rendered.
+    PolygonAccount::require_polygon();
+    ensure_nginx_is_running();
+    let account = PolygonAccount::create("polylkupgrade");
+    let domain = Domain::parse("upgrade.example.test").expect("a valid domain");
+    let input = served_polygon_site(&account, &domain);
+    let vhost = SitePaths::for_site(account.name(), &domain).config_path;
+    let _vhost = PolygonConfigFile::at(&vhost);
+
+    maran_ops::sites::disable_site(&ProcessSiteHost::new(), polygon_distro(), &input)
+        .unwrap_or_else(|error| panic!("suspending the site must succeed: {error}"));
+    let current = std::fs::read_to_string(&vhost).expect("the stub must be readable");
+    let rule_line = "        disable_symlinks if_not_owner;\n";
+    assert!(
+        current.contains(rule_line),
+        "the current stub must carry the rule, or there is no previous stub to build:\n{current}"
+    );
+    let previous = current.replacen(rule_line, "", 1);
+    assert_ne!(previous, current);
+    std::fs::write(&vhost, &previous).expect("the previous stub can be written");
+
+    reload_polygon_nginx();
+    let before = fetch_until(domain.as_str(), "/", |body| {
+        body.contains(SUSPENSION_NOTICE)
+    });
+    assert!(
+        before.starts_with("HTTP/1.1 403 "),
+        "the previous stub must be live before the install proves anything:\n{before}"
+    );
+
+    let ssl_host = ProcessSslHost::new();
+    generate_self_signed(&ssl_host, polygon_distro(), &input).unwrap_or_else(|error| {
+        panic!("issuing material for a suspended site must succeed: {error}")
+    });
+
+    assert_eq!(
+        std::fs::read_to_string(&vhost).expect("the stub must still be readable"),
+        previous,
+        "a certificate install must not rewrite a stub an earlier agent wrote"
+    );
+    reload_polygon_nginx();
+    let after = fetch_until(domain.as_str(), "/", |body| {
+        body.contains(SUSPENSION_NOTICE)
+    });
+    assert!(
+        after.starts_with("HTTP/1.1 403 "),
+        "a site suspended before the upgrade must stay suspended:\n{after}"
+    );
+    assert!(
+        !after.contains(SUSPENDED_ACCOUNT_BODY),
+        "the install put a suspended customer's page back on the air:\n{after}"
     );
 
     maran_ops::ssl::purge_certificate(&ssl_host, polygon_distro(), &domain);
