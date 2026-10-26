@@ -11,10 +11,10 @@ use crate::safe_write::model::{Reload, Validator};
 /// The operating-system operations the PHP module needs on top of the
 /// config-write protocol's own.
 ///
-/// A supertrait of [`ConfigHost`] rather than a separate seam: installing a
-/// package and reloading php-fpm are the same act — spawning an allow-listed
-/// absolute path with an argv array — so they share one `run`, and one fake
-/// covers the whole area.
+/// A supertrait of [`ConfigHost`] rather than a separate seam: starting the
+/// install unit and reloading php-fpm are the same act — spawning an
+/// allow-listed absolute path with an argv array — so they share one `run`, and
+/// one fake covers the whole area.
 ///
 /// The write method is on the seam rather than calling
 /// `crate::safe_write::write_config` directly for the reason the site area

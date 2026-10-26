@@ -13,8 +13,9 @@ use crate::php::{PhpHost, PhpOpError};
 use crate::safe_write::model::{Reload, Validator};
 use crate::safe_write::{CommandOutcome, ConfigHost, SafeWriteError, remove_config, write_config};
 
-/// Runs the real package manager, the real `php-fpm -t`, and the real
-/// `systemctl` — the one place in this area that spawns a process.
+/// Runs the real `php-fpm -t` and the real `systemctl` — the one place in this
+/// area that spawns a process. The package manager is not among them: it runs
+/// in the installer's install unit, started through `systemctl`.
 ///
 /// Deliberately the smallest piece of the area: every decision worth reviewing
 /// lives in the operations, where it is tested against a fake. What is left
@@ -41,7 +42,8 @@ impl ConfigHost for ProcessPhpHost {
     /// No shell is involved, at any point (rules/security.md item 3): the
     /// arguments reach `execve` one by one, so there is no command line for
     /// anything to re-parse — which matters more here than anywhere else in
-    /// the agent, because one of these argv arrays contains a package name.
+    /// the agent, because one of these argv arrays contains a unit name built
+    /// from a package name.
     /// `program` comes from the `DistroAdapter`'s allow-list and never from a
     /// request.
     ///
@@ -52,7 +54,7 @@ impl ConfigHost for ProcessPhpHost {
     /// # Errors
     ///
     /// Returns [`SafeWriteError::SpawnFailed`] when the program cannot be
-    /// started — a missing package is the common one here — carrying the
+    /// started — a missing binary is the one to expect here — carrying the
     /// operating system's reason. A program that started and exited non-zero
     /// is not an error: its status comes back in the outcome, and what that
     /// status means is the protocol's decision, not this host's.

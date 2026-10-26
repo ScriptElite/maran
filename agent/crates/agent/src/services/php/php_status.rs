@@ -10,7 +10,10 @@ use crate::proto::{AgentError, ErrorCode};
 /// grows into the handler, and so one variant maps to one code in exactly one
 /// place (rules/rust.md "Service anatomy").
 ///
-/// `tool_output` carries a failing program's stderr and nothing else. It is
+/// `tool_output` carries a failing program's stderr and nothing else, except
+/// that for the PHP install unit the failure carries `systemctl`'s stderr plus
+/// the unit name and a `journalctl` hint; the package manager's own output
+/// stays in that unit's journal. It is
 /// operator-facing by contract and never rendered to a customer, which is why
 /// the panel logs it rather than showing it (rules/security.md item 8).
 #[must_use]

@@ -15,9 +15,9 @@ pub enum PhpOpError {
     /// The version parses as a PHP version but is not one this panel runs.
     ///
     /// The supported set is closed (spec §11): what the agent installs is not
-    /// the caller's choice, so `9.9` is refused HERE and never reaches a
-    /// package manager. Handing an unknown name to `apt-get install` would
-    /// make the caller the author of the agent's package list.
+    /// the caller's choice, so `9.9` is refused HERE and never reaches the
+    /// install unit. Handing an unknown name to it would make the caller the
+    /// author of the agent's package list.
     #[error("PHP {version} is not a supported version")]
     UnsupportedVersion {
         /// The version that was asked for.
@@ -136,10 +136,17 @@ pub enum PhpOpError {
         reason: String,
     },
 
-    /// The package manager could not be run, or refused the installation.
-    #[error("the package manager failed: {stderr}")]
+    /// The install unit could not be started, failed, or succeeded without
+    /// the version appearing.
+    ///
+    /// The package manager runs inside that unit, not in the agent, so its
+    /// own output is in the unit's journal and not in this error.
+    #[error("the PHP install unit failed: {stderr}")]
     PackageManager {
-        /// The package manager's standard error, for an operator's log.
+        /// The service manager's standard error, followed by the unit name, a
+        /// pointer to `journalctl -u <unit>` where the package manager's own
+        /// output lives, and a hint that a missing unit means the installer
+        /// must be re-run, for an operator's log.
         stderr: String,
     },
 

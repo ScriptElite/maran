@@ -2,7 +2,7 @@
 //! decide about.
 //!
 //! Shared by every `*_tests.rs` in this folder through `#[path]`, because the
-//! real host runs `apt-get`, writes into a root-owned pool directory and
+//! real host starts the install unit, writes into a root-owned pool directory and
 //! restarts a live php-fpm: what a unit test can pin is which content an
 //! operation chooses to write, which argv array it chooses to spawn, and when
 //! it chooses to do neither. The write protocol has its own tests in
@@ -50,6 +50,14 @@ pub(crate) struct FakePhpHost {
     created_as_account: Mutex<Vec<PathBuf>>,
     /// The mode the host was asked to give each directory it created.
     modes: Mutex<BTreeMap<PathBuf, u32>>,
+    /// Per-subcommand answers that override the recording's single outcome,
+    /// keyed by the first argument: status, stdout, stderr.
+    answers: Mutex<BTreeMap<String, (i32, String, String)>>,
+    /// Subcommands whose program "cannot be started".
+    spawn_failures: Mutex<BTreeSet<String>>,
+    /// The version whose pool directory appears once a `start` succeeds, which
+    /// is what a real install unit leaves behind.
+    installs_on_start: Mutex<Option<String>>,
 }
 
 impl FakePhpHost {
@@ -64,6 +72,9 @@ impl FakePhpHost {
             removals: Mutex::new(0),
             created_as_account: Mutex::new(Vec::new()),
             modes: Mutex::new(BTreeMap::new()),
+            answers: Mutex::new(BTreeMap::new()),
+            spawn_failures: Mutex::new(BTreeSet::new()),
+            installs_on_start: Mutex::new(None),
         }
     }
 
@@ -87,6 +98,29 @@ impl FakePhpHost {
         self.recording.set_next(1, "", stderr);
     }
 
+    /// Answers every command whose first argument is `subcommand` with the
+    /// given outcome, whatever the rest of the commands answer.
+    pub(crate) fn answer(&self, subcommand: &str, status: i32, stdout: &str, stderr: &str) {
+        self.answers.lock().unwrap().insert(
+            subcommand.to_owned(),
+            (status, stdout.to_owned(), stderr.to_owned()),
+        );
+    }
+
+    /// Makes every command whose first argument is `subcommand` fail to spawn.
+    pub(crate) fn fail_to_spawn(&self, subcommand: &str) {
+        self.spawn_failures
+            .lock()
+            .unwrap()
+            .insert(subcommand.to_owned());
+    }
+
+    /// Makes a successful `start` leave `version`'s pool directory behind, as
+    /// the install unit's package manager does.
+    pub(crate) fn installs_on_start(&self, version: &str) {
+        *self.installs_on_start.lock().unwrap() = Some(version.to_owned());
+    }
+
     /// Makes `php-fpm -t` refuse every pool, with `stderr` as the reason.
     pub(crate) fn reject_validation(&self, stderr: &str) {
         *self.validation.lock().unwrap() = (1, stderr.to_owned());
@@ -107,17 +141,23 @@ impl FakePhpHost {
         self.created_as_account.lock().unwrap().clone()
     }
 
+    /// Every directory the host was asked to create with `create_directory`,
+    /// whatever its path.
+    pub(crate) fn created_directories(&self) -> Vec<PathBuf> {
+        self.modes.lock().unwrap().keys().cloned().collect()
+    }
+
     /// The mode the host was asked to give `path`, if it created it.
     pub(crate) fn mode(&self, path: &Path) -> Option<u32> {
         self.modes.lock().unwrap().get(path).copied()
     }
 
-    /// How many writes reached the protocol.
     /// How many removals reached the protocol.
     pub(crate) fn removals(&self) -> usize {
         *self.removals.lock().unwrap()
     }
 
+    /// How many writes reached the protocol.
     pub(crate) fn writes(&self) -> usize {
         *self.writes.lock().unwrap()
     }
@@ -125,7 +165,34 @@ impl FakePhpHost {
 
 impl ConfigHost for FakePhpHost {
     fn run(&self, program: &str, arguments: &[&str]) -> Result<CommandOutcome, SafeWriteError> {
-        Ok(self.recording.record(program, arguments))
+        let mut outcome = self.recording.record(program, arguments);
+        let subcommand = arguments.first().copied().unwrap_or_default();
+
+        if self.spawn_failures.lock().unwrap().contains(subcommand) {
+            return Err(SafeWriteError::SpawnFailed {
+                program: program.to_owned(),
+                reason: "no such file or directory".to_owned(),
+            });
+        }
+        if let Some((status, stdout, stderr)) = self.answers.lock().unwrap().get(subcommand) {
+            outcome = CommandOutcome {
+                status: *status,
+                stdout: stdout.clone(),
+                stderr: stderr.clone(),
+            };
+        }
+        let installed = self.installs_on_start.lock().unwrap().clone();
+        if let Some(version) = installed.filter(|_| subcommand == "start" && outcome.status == 0) {
+            // Whichever family the operation was given, the unit leaves ITS
+            // pool directory behind, so both spellings appear.
+            let mut directories = self.directories.lock().unwrap();
+            for family in [DistroFamily::Debian, DistroFamily::Rhel] {
+                directories.insert(PathBuf::from(
+                    adapter_for(family).php_fpm_pool_directory(&version),
+                ));
+            }
+        }
+        Ok(outcome)
     }
 }
 
