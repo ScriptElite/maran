@@ -1,6 +1,14 @@
 # Committed per-target test baseline. Recorded by 'maran test --accept'; commit the diff.
 # stack<TAB>target<TAB>passed<TAB>failed<TAB>ignored
 #
+# RE-MEASURED 2026-10-26 (issues #78, #79, #80): rust 1975/0/117, backend 3435/0/0, spa 593/0/1. Backend and spa
+# re-recorded (`maran test backend --accept`, `maran test spa --accept`); rust unchanged. Rows ROSE,
+# none fell: Accounts.Tests and Identity.Tests gained the plan create/update/delete and invitation-link
+# suites, Host.IntegrationTests gained InvitationLinkEndpointTests and PlansEndpointTests (real
+# PostgreSQL), and the spa gained accounts/invitation-link.spec.ts and plans/plans.spec.ts. The backend
+# rows recorded before this were older than the work since #29, so part of the backend rise is tests
+# that already existed and simply had not been re-measured.
+#
 # RE-MEASURED 2026-10-26 (UI redesign, issue #82): rust 1975/0/117, backend 3222/0/0, spa 561/0/1. Only the spa
 # stack was re-recorded (`maran test spa --accept`); rust and backend are unchanged by #82 and their
 # rows are the ones already here. Twelve spa rows are NEW, each a spec the redesign added to hold an
@@ -252,28 +260,29 @@ rust	doc-tests maran_distro	0	0	0
 rust	doc-tests maran_ops	0	0	0
 rust	doc-tests maran_templates	0	0	0
 backend	Maran.Agent.Client.Tests.dll	328	0	0
-backend	Maran.Modules.Backups.Tests.dll	191	0	0
 backend	Maran.SharedKernel.Tests.dll	168	0	0
+backend	Maran.Modules.Identity.Tests.dll	275	0	0
+backend	Maran.Modules.Sftp.Tests.dll	80	0	0
 backend	Maran.Modules.Notifications.Tests.dll	48	0	0
 backend	Maran.Modules.Tasks.Tests.dll	54	0	0
-backend	Maran.Modules.Monitoring.Tests.dll	66	0	0
-backend	Maran.Modules.Sftp.Tests.dll	80	0	0
 backend	Maran.Modules.Ftp.Tests.dll	109	0	0
-backend	Maran.Modules.Cron.Tests.dll	181	0	0
-backend	Maran.Modules.Sites.Tests.dll	176	0	0
+backend	Maran.Modules.Monitoring.Tests.dll	66	0	0
+backend	Maran.Modules.Backups.Tests.dll	191	0	0
+backend	Maran.Modules.Licensing.Tests.dll	47	0	0
 backend	Maran.Modules.Firewall.Tests.dll	249	0	0
-backend	Maran.Modules.Accounts.Tests.dll	199	0	0
+backend	Maran.Modules.Cron.Tests.dll	181	0	0
+backend	Maran.Modules.Accounts.Tests.dll	279	0	0
 backend	Maran.Modules.Databases.Tests.dll	101	0	0
 backend	Maran.Modules.Ssl.Tests.dll	159	0	0
-backend	Maran.Modules.Identity.Tests.dll	203	0	0
-backend	Maran.Modules.Licensing.Tests.dll	47	0	0
-backend	Maran.Sdk.Tests.dll	197	0	0
-backend	Maran.ArchitectureTests.dll	58	0	0
-backend	Maran.Host.Tests.dll	241	0	0
-backend	Maran.Host.IntegrationTests.dll	367	0	0
+backend	Maran.Sdk.Tests.dll	204	0	0
+backend	Maran.Modules.Sites.Tests.dll	176	0	0
+backend	Maran.ArchitectureTests.dll	62	0	0
+backend	Maran.Host.Tests.dll	243	0	0
+backend	Maran.Host.IntegrationTests.dll	415	0	0
 spa	accounts/delete.spec.ts	6	0	0
 spa	accounts/detail.spec.ts	10	0	0
 spa	accounts/form.spec.ts	7	0	0
+spa	accounts/invitation-link.spec.ts	8	0	0
 spa	accounts/list.spec.ts	3	0	0
 spa	admin/audit.spec.ts	3	0	0
 spa	admin/smtp-settings.spec.ts	2	0	0
@@ -317,6 +326,7 @@ spa	firewall/ranges.spec.ts	5	0	0
 spa	firewall/whitelist.spec.ts	7	0	0
 spa	golden-path/account-to-ssl.spec.ts	0	0	1
 spa	monitoring/monitoring.spec.ts	10	0	0
+spa	plans/plans.spec.ts	15	0	0
 spa	shell/account-menu.spec.ts	4	0	0
 spa	shell/app-bar-fits.spec.ts	16	0	0
 spa	shell/command-palette-a11y.spec.ts	3	0	0
@@ -349,7 +359,7 @@ spa	ui-kit/chart.spec.ts	5	0	0
 spa	ui-kit/dropdown-landing-focus.spec.ts	5	0	0
 spa	ui-kit/focus-return.spec.ts	3	0	0
 spa	ui-kit/modal-keyboard.spec.ts	2	0	0
-spa	ui-kit/no-horizontal-scroll-admin.spec.ts	57	0	0
+spa	ui-kit/no-horizontal-scroll-admin.spec.ts	66	0	0
 spa	ui-kit/no-horizontal-scroll-other.spec.ts	54	0	0
 spa	ui-kit/table-narrow.spec.ts	19	0	0
 spa	ui-kit/text-zoom.spec.ts	3	0	0
