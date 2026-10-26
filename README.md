@@ -1,15 +1,56 @@
-# Maran
+<p align="center">
+  <img src="docs/brand/maran-keystone.svg" width="96" height="96" alt="">
+</p>
 
-[![backend](https://github.com/innovayse/maran/actions/workflows/backend.yml/badge.svg?branch=dev)](https://github.com/innovayse/maran/actions/workflows/backend.yml)
-[![agent](https://github.com/innovayse/maran/actions/workflows/agent.yml/badge.svg?branch=dev)](https://github.com/innovayse/maran/actions/workflows/agent.yml)
-[![frontend](https://github.com/innovayse/maran/actions/workflows/frontend.yml/badge.svg?branch=dev)](https://github.com/innovayse/maran/actions/workflows/frontend.yml)
-[![cross](https://github.com/innovayse/maran/actions/workflows/cross.yml/badge.svg?branch=dev)](https://github.com/innovayse/maran/actions/workflows/cross.yml)
-[![licence: BSL 1.1](https://img.shields.io/badge/licence-BSL%201.1-blue)](LICENSE)
+<h1 align="center">Maran</h1>
 
-A modern web hosting control panel for Linux servers. Install it on a server and manage
-websites, PHP versions, SSL certificates, databases, files, backups and the firewall from a
-browser, with a separate cabinet for every hosting customer and an API that billing systems
-drive to create accounts automatically.
+<p align="center">
+  <strong>A modern web hosting control panel for Linux servers.</strong><br>
+  Install it on a server and manage websites, PHP versions, SSL certificates, databases, files,
+  backups and the firewall from a browser, with a separate cabinet for every hosting customer and
+  an API that billing systems drive to create accounts automatically.
+</p>
+
+<p align="center">
+  <a href="https://github.com/innovayse/maran/actions/workflows/backend.yml"><img src="https://github.com/innovayse/maran/actions/workflows/backend.yml/badge.svg?branch=dev" alt="backend"></a>
+  <a href="https://github.com/innovayse/maran/actions/workflows/agent.yml"><img src="https://github.com/innovayse/maran/actions/workflows/agent.yml/badge.svg?branch=dev" alt="agent"></a>
+  <a href="https://github.com/innovayse/maran/actions/workflows/frontend.yml"><img src="https://github.com/innovayse/maran/actions/workflows/frontend.yml/badge.svg?branch=dev" alt="frontend"></a>
+  <a href="https://github.com/innovayse/maran/actions/workflows/cross.yml"><img src="https://github.com/innovayse/maran/actions/workflows/cross.yml/badge.svg?branch=dev" alt="cross"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-BSL%201.1-blue" alt="licence: BSL 1.1"></a>
+</p>
+
+<p align="center">
+  <a href="#why-maran">Why Maran</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#installation">Installation</a> ·
+  <a href="#development">Development</a> ·
+  <a href="#contributing">Contributing</a> ·
+  <a href="#security">Security</a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="The Maran dashboard: what the server is doing, its accounts, sites and databases, resource use and the latest activity" width="100%">
+</p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/sign-in.png" alt="Signing in" width="100%"></td>
+    <td width="50%"><img src="docs/screenshots/plans.png" alt="Hosting plans and their limits" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/accounts.png" alt="Hosting accounts" width="100%"></td>
+    <td width="50%" align="center">
+      <img src="docs/screenshots/mobile-dashboard.png" alt="The dashboard on a phone" width="44%">
+      &nbsp;
+      <img src="docs/screenshots/mobile-menu.png" alt="The navigation drawer on a phone" width="44%">
+    </td>
+  </tr>
+</table>
+
+<p align="center"><sub>English, Russian and Armenian · dark and light themes · usable down to a 320&nbsp;px phone</sub></p>
+
+## About
 
 Source-available and free to self-host; commercial modules are distributed through the
 Innovayse marketplace.
@@ -47,41 +88,19 @@ producing security advisories. Maran takes a different position:
 
 ## Features
 
-**Websites** — PHP, static and reverse-proxy sites; domain aliases; per-site PHP version;
-access and error logs in the interface; HTTPS and www redirects; enable/disable.
-
-**PHP** — versions 7.4 through 8.4 side by side, installed on demand. Each account gets its
-own pool running under its own user, with a safe subset of settings exposed to customers.
-
-**SSL** — free Let's Encrypt certificates with automatic renewal, custom certificate upload,
-self-signed fallback.
-
-**Databases** — MySQL/MariaDB databases and users with per-plan limits. A web database manager is
-**not** part of this release: it is planned as a separate deployable with its own vhost and
-authentication rather than bundled into the panel. This line used to read as though it were
-available.
-
-**File access** — SFTP with chroot by default and FTPS for compatibility, installed switched off and
-turned on per server by an administrator (both shipped); a browser file manager with uploads, an
-editor, archives, permissions and search (planned).
-
-**Scheduled tasks** — per-account cron with a schedule builder, environment variables and
-last-run output.
-
-**Firewall** — nftables management with sensible presets, custom rules, IP allow-lists and
-automatic banning of brute-force sources.
-
-**Monitoring** — CPU, memory, disk, network and load graphs, service status, per-account disk
-usage against quota, and email alerts on thresholds.
-
-**Backups** — scheduled file and database backups, local or S3-compatible storage, restore
-from the interface, retention policies.
-
-**Accounts and plans** — hosting accounts with quotas and limits, customer logins, suspension
-as a first-class state, and a full audit log of every action.
-
-**Security** — two-factor authentication, revocable sessions, rate limiting with automatic
-firewall bans, scoped API keys, and role-aware error messages.
+| | |
+|---|---|
+| **Websites** | PHP, static and reverse-proxy sites; domain aliases; per-site PHP version; access and error logs in the interface; HTTPS and www redirects; enable/disable. |
+| **PHP** | versions 7.4 through 8.4 side by side, installed on demand. Each account gets its own pool running under its own user, with a safe subset of settings exposed to customers. |
+| **SSL** | free Let's Encrypt certificates with automatic renewal, custom certificate upload, self-signed fallback. |
+| **Databases** | MySQL/MariaDB databases and users with per-plan limits. A web database manager is **not** part of this release: it is planned as a separate deployable with its own vhost and authentication rather than bundled into the panel. This line used to read as though it were available. |
+| **File access** | SFTP with chroot by default and FTPS for compatibility, installed switched off and turned on per server by an administrator (both shipped); a browser file manager with uploads, an editor, archives, permissions and search (planned). |
+| **Scheduled tasks** | per-account cron with a schedule builder, environment variables and last-run output. |
+| **Firewall** | nftables management with sensible presets, custom rules, IP allow-lists and automatic banning of brute-force sources. |
+| **Monitoring** | CPU, memory, disk, network and load graphs, service status, per-account disk usage against quota, and email alerts on thresholds. |
+| **Backups** | scheduled file and database backups, local or S3-compatible storage, restore from the interface, retention policies. |
+| **Accounts and plans** | hosting accounts with quotas and limits, customer logins, suspension as a first-class state, and a full audit log of every action. |
+| **Security** | two-factor authentication, revocable sessions, rate limiting with automatic firewall bans, scoped API keys, and role-aware error messages. |
 
 ## Architecture
 
