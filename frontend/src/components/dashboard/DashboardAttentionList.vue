@@ -3,7 +3,7 @@
  * What on this server is asking to be looked at: certificates near expiry, backups that failed,
  * addresses the firewall is refusing, panel tasks that failed.
  *
- * **Only the rows that are not zero are shown, and when none of them is, the card says so in a
+ * **Only the rows that are not zero are shown, and when none of them is, the notice says so in a
  * sentence.** That is the opposite of {@link DashboardCountGrid}, where every tile is always drawn,
  * and the difference is deliberate: a count of accounts is information at any value, while a list of
  * four permanent zeros trains a reader to stop looking at the one card whose whole purpose is to be
@@ -11,13 +11,18 @@
  *
  * Each row links to the screen that holds the detail. A number on a landing page is only useful if
  * the next click is obvious.
+ *
+ * **This is the page's notice, and it is drawn first.** The one thing that needs attention goes
+ * above everything else as an amber `UiAlert` (a warning is amber, never blue); when nothing does,
+ * the same slot says so in a green one, so the reader learns the answer from the same place either
+ * way. The rows live inside the notice and are drawn as links, not as a second card, so the sentence
+ * and its next click are one object.
  */
 import { computed, type ComputedRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RouterLink } from 'vue-router'
-import UiBadge from '../ui/UiBadge.vue'
-import UiCard from '../ui/UiCard.vue'
-import UiSectionHeading from '../ui/UiSectionHeading.vue'
+import UiAlert from '../ui/UiAlert.vue'
+import UiIcon from '../ui/UiIcon.vue'
 import type { DashboardAttention } from '../../types/dashboard'
 
 /** One row: how many, of what, and where to look. */
@@ -56,18 +61,22 @@ const rows: ComputedRef<AttentionRow[]> = computed(() => {
 </script>
 
 <template>
-  <UiCard>
-    <UiSectionHeading class="mb-3" :title="t('app.status.attention.title')" />
+  <UiAlert v-if="rows.length > 0" variant="warning">
+    <p class="font-semibold">{{ t('app.status.attention.title') }}</p>
 
-    <p v-if="rows.length === 0" class="text-sm text-[var(--t2)]">{{ t('app.status.attention.allClear') }}</p>
-
-    <ul v-else class="flex flex-col gap-2">
+    <ul class="mt-1.5 flex flex-wrap gap-x-6 gap-y-1">
       <li v-for="row in rows" :key="row.key">
-        <RouterLink :to="row.to" class="flex items-center gap-2 text-sm text-[var(--t1)]">
-          <UiBadge variant="warning">{{ row.value }}</UiBadge>
+        <RouterLink
+          :to="row.to"
+          class="inline-flex items-center gap-2 rounded-control text-text-secondary transition-colors hover:text-text-primary focus-visible:shadow-focus focus-visible:outline-none motion-reduce:transition-none"
+        >
+          <span class="font-mono font-semibold text-text-primary tabular-nums">{{ row.value }}</span>
           <span>{{ t(`app.status.attention.${row.key}`) }}</span>
+          <UiIcon name="arrowRight" size="sm" />
         </RouterLink>
       </li>
     </ul>
-  </UiCard>
+  </UiAlert>
+
+  <UiAlert v-else variant="success">{{ t('app.status.attention.allClear') }}</UiAlert>
 </template>

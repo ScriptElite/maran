@@ -18,6 +18,7 @@
 import {
   Activity,
   Archive,
+  ArrowRight,
   Bell,
   BrickWall,
   ChartLine,
@@ -25,27 +26,46 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  CircleAlert,
+  CircleCheck,
   Clock,
   Copy,
+  Cpu,
   Database,
   Dices,
   Earth,
   Ellipsis,
+  ExternalLink,
   Eye,
   EyeOff,
+  FileText,
   FolderKey,
   Globe,
+  HardDrive,
+  House,
+  Info,
+  KeyRound,
   LayoutGrid,
   ListChecks,
+  Lock,
   LogOut,
+  Mail,
+  MemoryStick,
   Menu,
   Moon,
+  Pencil,
+  Plus,
+  RotateCw,
   ScrollText,
   Search,
   Server,
+  Settings,
   ShieldCheck,
   Sparkle,
   Sun,
+  Trash2,
+  TriangleAlert,
   User,
   Users,
   X,
@@ -89,6 +109,8 @@ export type UiIconName =
   | 'bell'
   /** The signed-in account. */
   | 'user'
+  /** An envelope — an e-mail address field, or anything sent by mail. */
+  | 'mail'
   /** Collapse the sidebar into the rail. */
   | 'chevronLeft'
   /** Expand the rail back into the sidebar. */
@@ -121,6 +143,44 @@ export type UiIconName =
   | 'archive'
   /** A written scroll — the audit journal, the panel's append-only record of who did what. */
   | 'scrollText'
+  /** A cog — settings. */
+  | 'settings'
+  /** A plus — creating something; the leading mark of a primary "new" action. */
+  | 'plus'
+  /** A box with an outgoing arrow — a link that leaves the panel. */
+  | 'externalLink'
+  /** A padlock — certificates and anything sealed. */
+  | 'lock'
+  /** A key — credentials and access keys. */
+  | 'keyRound'
+  /** A clockwise arrow — restoring, renewing or retrying. */
+  | 'rotateCw'
+  /** A warning triangle — a warning, or a question whose answer cannot be undone. */
+  | 'triangleAlert'
+  /** An exclamation in a disc — an error. */
+  | 'circleAlert'
+  /** A tick in a disc — a success. */
+  | 'circleCheck'
+  /** An "i" in a disc — neutral information. */
+  | 'info'
+  /** A right arrow — a link or action that moves on. */
+  | 'arrowRight'
+  /** An upward chevron — a collapsed group or an ascending sort. */
+  | 'chevronUp'
+  /** A processor — the CPU figure of a server. */
+  | 'cpu'
+  /** A memory module — the RAM figure of a server. */
+  | 'memoryStick'
+  /** A drive — the disk figure of a server. */
+  | 'hardDrive'
+  /** A page of text — a log or a document. */
+  | 'fileText'
+  /** A house — the overview, the panel's home. */
+  | 'house'
+  /** A bin — deleting something. */
+  | 'trash'
+  /** A pencil — editing something. */
+  | 'pencil'
 
 /**
  * Every glyph the panel draws, mapped to its lucide component. The map is
@@ -145,6 +205,7 @@ const ICONS: Record<UiIconName, LucideIcon> = {
   sparkle: Sparkle,
   bell: Bell,
   user: User,
+  mail: Mail,
   chevronLeft: ChevronLeft,
   chevronRight: ChevronRight,
   chevronDown: ChevronDown,
@@ -161,6 +222,25 @@ const ICONS: Record<UiIconName, LucideIcon> = {
   chartLine: ChartLine,
   archive: Archive,
   scrollText: ScrollText,
+  settings: Settings,
+  plus: Plus,
+  externalLink: ExternalLink,
+  lock: Lock,
+  keyRound: KeyRound,
+  rotateCw: RotateCw,
+  triangleAlert: TriangleAlert,
+  circleAlert: CircleAlert,
+  circleCheck: CircleCheck,
+  info: Info,
+  arrowRight: ArrowRight,
+  chevronUp: ChevronUp,
+  cpu: Cpu,
+  memoryStick: MemoryStick,
+  hardDrive: HardDrive,
+  fileText: FileText,
+  house: House,
+  trash: Trash2,
+  pencil: Pencil,
 }
 
 /**

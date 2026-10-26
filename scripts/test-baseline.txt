@@ -1,6 +1,14 @@
 # Committed per-target test baseline. Recorded by 'maran test --accept'; commit the diff.
 # stack<TAB>target<TAB>passed<TAB>failed<TAB>ignored
 #
+# RE-MEASURED 2026-10-26 (UI redesign, issue #82): rust 1975/0/117, backend 3222/0/0, spa 561/0/1. Only the spa
+# stack was re-recorded (`maran test spa --accept`); rust and backend are unchanged by #82 and their
+# rows are the ones already here. Twelve spa rows are NEW, each a spec the redesign added to hold an
+# acceptance criterion or a defect found while building it (mobile drawer, no horizontal scroll at
+# 390 px in en/ru/hy, narrow tables, app bar fit, text zoom, focus return, palette combobox, document
+# titles, persisted theme on signed-out pages, long badges); dashboard.spec.ts was already in the
+# suite but missing from this file. No row fell.
+#
 # RE-MEASURED 2026-09-19 (quota enforceability, issue #29): rust 1960/0/116, backend 3142/0/0,
 # spa 370/0/1 — every stack sum verified against the run it came from. Three rows moved and none
 # fell: Monitoring 53->60 and Ssl 158->159 on the backend, monitoring.spec.ts 6->7 on the spa.
@@ -277,6 +285,7 @@ spa	auth/login.spec.ts	7	0	0
 spa	auth/reset-password.spec.ts	2	0	0
 spa	auth/sessions.spec.ts	6	0	0
 spa	auth/setup.spec.ts	8	0	0
+spa	auth/theme-persists.spec.ts	3	0	0
 spa	auth/two-factor-setup.spec.ts	2	0	0
 spa	auth/two-factor.spec.ts	5	0	0
 spa	backups/destinations.spec.ts	9	0	0
@@ -290,6 +299,7 @@ spa	cron/environment.spec.ts	5	0	0
 spa	cron/raw-refusal.spec.ts	4	0	0
 spa	cron/schedule.spec.ts	2	0	0
 spa	customer-area.spec.ts	2	0	0
+spa	dashboard.spec.ts	6	0	0
 spa	databases/create.spec.ts	5	0	0
 spa	databases/credentials.spec.ts	15	0	0
 spa	databases/grant-repair.spec.ts	11	0	0
@@ -306,9 +316,12 @@ spa	firewall/presets.spec.ts	6	0	0
 spa	firewall/ranges.spec.ts	5	0	0
 spa	firewall/whitelist.spec.ts	7	0	0
 spa	golden-path/account-to-ssl.spec.ts	0	0	1
-spa	monitoring/monitoring.spec.ts	7	0	0
+spa	monitoring/monitoring.spec.ts	10	0	0
 spa	shell/account-menu.spec.ts	4	0	0
+spa	shell/app-bar-fits.spec.ts	16	0	0
+spa	shell/command-palette-a11y.spec.ts	3	0	0
 spa	shell/command-palette.spec.ts	1	0	0
+spa	shell/document-title.spec.ts	5	0	0
 spa	shell/health-server-error.spec.ts	1	0	0
 spa	shell/health-status.spec.ts	2	0	0
 spa	shell/health-unreachable.spec.ts	1	0	0
@@ -317,6 +330,7 @@ spa	shell/licence-gating.spec.ts	11	0	0
 spa	shell/locale-persistence.spec.ts	3	0	0
 spa	shell/locale-switch.spec.ts	5	0	0
 spa	shell/locale.spec.ts	4	0	0
+spa	shell/mobile-drawer.spec.ts	15	0	0
 spa	shell/module-landing-coverage.spec.ts	2	0	0
 spa	shell/not-found.spec.ts	1	0	0
 spa	shell/renders-title.spec.ts	1	0	0
@@ -330,8 +344,14 @@ spa	tasks/badge.spec.ts	3	0	0
 spa	tasks/list.spec.ts	7	0	0
 spa	tasks/log-fidelity.spec.ts	2	0	0
 spa	tasks/progress-unit.spec.ts	1	0	0
+spa	ui-kit/badge-narrow.spec.ts	2	0	0
 spa	ui-kit/chart.spec.ts	5	0	0
 spa	ui-kit/dropdown-landing-focus.spec.ts	5	0	0
+spa	ui-kit/focus-return.spec.ts	3	0	0
 spa	ui-kit/modal-keyboard.spec.ts	2	0	0
+spa	ui-kit/no-horizontal-scroll-admin.spec.ts	57	0	0
+spa	ui-kit/no-horizontal-scroll-other.spec.ts	54	0	0
+spa	ui-kit/table-narrow.spec.ts	19	0	0
+spa	ui-kit/text-zoom.spec.ts	3	0	0
 spa	ui-kit/unfilled-select-prompt.spec.ts	3	0	0
 spa	upgrade/tier-name.spec.ts	3	0	0

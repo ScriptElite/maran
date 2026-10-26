@@ -10,11 +10,18 @@
  * other two are byte pairs, so the processor's bar is given a max of 100 explicitly rather than
  * being passed a total it does not have.
  *
- * **Every bar carries its label and its figure as visible text.** `UiMeter` is a bar and nothing
- * else — its `label` and `valueText` reach assistive technology through `aria-label` and
- * `aria-valuetext` and are invisible on screen — so a card that passed them and stopped would show
- * an operator three unlabelled stripes. The monitoring screen's disk table pairs the same primitive
- * with its own visible figures for the same reason.
+ * **Every bar carries its label and its figure as visible text.** A bar's `label` and `valueText`
+ * reach assistive technology through `aria-label` and `aria-valuetext` and are invisible on screen,
+ * so a card that passed them and stopped would show an operator three unlabelled stripes. The tile
+ * prints the label and the reading itself, and tells `UiMeter` not to print its own percentage
+ * (`:show-value="false"`) so the figure is not drawn twice.
+ *
+ * **The card is three figure tiles under one heading, not one panel with three stripes.** Each tile
+ * is a `UiCard` (its own `p-5` padding is left alone — a second padding class on the card would lose to it) in the redesign's figure-card form: an accent icon square, the reading in the display
+ * face, a small uppercase label and the bar. The tiles are NOT links: the monitoring screen belongs
+ * to a licensed module, and a figure that led to the upgrade page would be a worse answer than one
+ * that is simply a figure. The bars sit at the bottom of their tiles so the three line up whatever
+ * the tiles above them hold.
  *
  * **The network counters the payload carries are deliberately not shown.** They are totals since
  * boot, not rates, and "4.2 TB received" on a landing page reads as traffic while meaning uptime.
@@ -24,8 +31,8 @@
 import { computed, type ComputedRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import UiCard from '../ui/UiCard.vue'
-import UiDescriptionItem from '../ui/UiDescriptionItem.vue'
-import UiDescriptionList from '../ui/UiDescriptionList.vue'
+import type { UiIconName } from '../ui/UiIcon.vue'
+import UiIconTile from '../ui/UiIconTile.vue'
 import UiMeter from '../ui/UiMeter.vue'
 import UiSectionHeading from '../ui/UiSectionHeading.vue'
 import { formatBytes } from '../../utils/formatBytes'
@@ -49,7 +56,7 @@ const cpuText: ComputedRef<string> = computed(() => {
   return `${props.resources.cpuPercent.toFixed(1)}${t('monitoring.units.percent')}`
 })
 
-/** Memory in use beside what is installed. */
+/** Memory in use beside what is installed, as one sentence for assistive technology. */
 const memoryText: ComputedRef<string> = computed(() => {
   return t('app.status.resources.ratio', {
     used: formatBytes(props.resources.memoryUsedBytes),
@@ -57,7 +64,7 @@ const memoryText: ComputedRef<string> = computed(() => {
   })
 })
 
-/** Disk in use on the root filesystem beside its capacity. */
+/** Disk in use on the root filesystem beside its capacity, as one sentence for assistive technology. */
 const diskText: ComputedRef<string> = computed(() => {
   return t('app.status.resources.ratio', {
     used: formatBytes(props.resources.diskUsedBytes),
@@ -65,48 +72,63 @@ const diskText: ComputedRef<string> = computed(() => {
   })
 })
 
-/** One bar: what it measures, how far along it is, and the figure a reader sees. */
+/** One tile: what it measures, how far along it is, and the figure a reader sees. */
 interface Reading {
   /** Stable key for the list. */
   key: string
+  /** The glyph in the tile's icon square. */
+  icon: UiIconName
   /** The measure's name, already translated. */
   label: string
   /** How much is used, in the same unit as {@link Reading.max}. */
   value: number
   /** The allowance, in the same unit as {@link Reading.value}. */
   max: number
-  /** The figure as a reader sees it, and as assistive technology announces it. */
+  /** The large figure: the reading itself. */
+  figure: string
+  /** The small figure beside it — what it is out of — or `null` when the reading stands alone. */
+  of: string | null
+  /** The whole reading as one sentence, announced by the bar. */
   text: string
 }
 
 /**
- * The three bars, in the order an operator triages them: the processor says what is happening now,
+ * The three tiles, in the order an operator triages them: the processor says what is happening now,
  * memory says whether it can continue, and the disk says whether it can continue tomorrow.
  */
 const readings: ComputedRef<Reading[]> = computed(() => {
   return [
     {
       key: 'cpu',
+      icon: 'cpu',
       label: t('monitoring.charts.cpu'),
       value: props.resources.cpuPercent,
 
       // 100 explicitly: a percentage carries no total of its own, and passing one of the byte
       // figures here would draw a bar at a ratio that means nothing.
       max: 100,
+      figure: cpuText.value,
+      of: null,
       text: cpuText.value,
     },
     {
       key: 'memory',
+      icon: 'memoryStick',
       label: t('monitoring.charts.memory'),
       value: props.resources.memoryUsedBytes,
       max: props.resources.memoryTotalBytes,
+      figure: formatBytes(props.resources.memoryUsedBytes),
+      of: `/ ${formatBytes(props.resources.memoryTotalBytes)}`,
       text: memoryText.value,
     },
     {
       key: 'disk',
+      icon: 'hardDrive',
       label: t('monitoring.charts.disk'),
       value: props.resources.diskUsedBytes,
       max: props.resources.diskTotalBytes,
+      figure: formatBytes(props.resources.diskUsedBytes),
+      of: `/ ${formatBytes(props.resources.diskTotalBytes)}`,
       text: diskText.value,
     },
   ]
@@ -132,30 +154,52 @@ const loadText: ComputedRef<string> = computed(() => {
 </script>
 
 <template>
-  <UiCard>
+  <section>
     <UiSectionHeading class="mb-3" :title="t('app.status.resources.title')" />
 
-    <div class="grid gap-4 sm:grid-cols-3">
-      <div
-        v-for="reading in readings"
-        :key="reading.key"
-        class="flex flex-col gap-1"
-      >
-        <div class="flex items-baseline justify-between gap-2">
-          <span class="text-sm text-[var(--t2)]">{{ reading.label }}</span>
-          <span class="text-sm font-medium text-[var(--t1)]">{{ reading.text }}</span>
-        </div>
-        <UiMeter
-          :value="reading.value"
-          :max="reading.max"
-          :label="reading.label"
-          :value-text="reading.text"
-        />
-      </div>
-    </div>
+    <!-- Three tiles side by side only from `@xl` (36rem of CONTAINER width). The tiles' own
+         layout switches below read the same container, so the grid and the tile never disagree:
+         under a large system font the content panel is narrow on a wide viewport, and a viewport
+         `sm:` here put three tiles in it, spilling "37.4%" past its tile. -->
+    <div class="@container">
+    <div class="grid gap-4 @xl:grid-cols-3">
+      <UiCard v-for="reading in readings" :key="reading.key" class="flex flex-col">
+        <!-- Under `@xl` the icon sits BESIDE the reading so a one-column tile is two short rows
+             (reading, bar) rather than four stacked ones; from `@xl` up the tile is narrow, and the
+             icon goes back above the reading. -->
+        <div class="flex items-center gap-3 @xl:block">
+          <UiIconTile :name="reading.icon" />
 
-    <UiDescriptionList class="mt-4">
-      <UiDescriptionItem :term="t('app.status.resources.load')" mono>{{ loadText }}</UiDescriptionItem>
-    </UiDescriptionList>
-  </UiCard>
+          <div class="min-w-0 @xl:mt-3.5">
+            <p class="m-0 flex flex-wrap items-baseline gap-x-1.5 font-display text-2xl leading-none font-black @xl:text-3xl">
+              <span>{{ reading.figure }}</span>
+              <small v-if="reading.of !== null" class="text-sm font-extrabold whitespace-nowrap text-text-muted">{{ reading.of }}</small>
+            </p>
+            <!-- `text-sm` on a phone: the display face at `text-xs` in capitals, and in Armenian
+                 above all, reads as a smudge beside the figure. The narrow three-up tiles from
+                 `sm` up keep `text-xs`, where a larger label would wrap in every language. -->
+            <p class="m-0 mt-2 font-display text-sm font-extrabold tracking-caps text-text-secondary uppercase break-words @xl:text-xs">{{ reading.label }}</p>
+          </div>
+        </div>
+
+        <!-- The processor tile also carries the load averages, so the three tiles stay three and
+             the trend sits beside the instant it explains. -->
+        <p v-if="reading.key === 'cpu'" class="m-0 mt-2 text-xs text-text-muted">
+          <span>{{ t('app.status.resources.load') }}</span>
+          <span class="ml-1.5 font-mono text-text-secondary tabular-nums">{{ loadText }}</span>
+        </p>
+
+        <div class="mt-auto pt-3.5">
+          <UiMeter
+            :value="reading.value"
+            :max="reading.max"
+            :label="reading.label"
+            :value-text="reading.text"
+            :show-value="false"
+          />
+        </div>
+      </UiCard>
+    </div>
+    </div>
+  </section>
 </template>
