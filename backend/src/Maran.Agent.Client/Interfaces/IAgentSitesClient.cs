@@ -31,7 +31,11 @@ public interface IAgentSitesClient
     /// <param name="maxChildren">The plan's worker budget, written into the pool's <c>pm.max_children</c>; ignored unless the backend is PHP.</param>
     /// <param name="settingOverrides">The customer's php.ini overrides, re-validated by the agent; ignored unless the backend is PHP.</param>
     /// <param name="cancellationToken">Cancellation for the call.</param>
-    /// <returns>Where the site's files live, or a typed failure.</returns>
+    /// <returns>
+    /// Where the site's files live, or a typed failure. <c>AgentAlreadyExists</c> means a vhost for this
+    /// domain exists already, or another vhost on the host already serves the domain or an alias; no
+    /// vhost was written in either case.
+    /// </returns>
     Task<Result<CreatedSiteDto>> CreateAsync(
         string accountUsername,
         string domain,
