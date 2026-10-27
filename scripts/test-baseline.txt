@@ -1,6 +1,10 @@
 # Committed per-target test baseline. Recorded by 'maran test --accept'; commit the diff.
 # stack<TAB>target<TAB>passed<TAB>failed<TAB>ignored
 #
+# RE-MEASURED 2026-10-27 (issue #85, duplicate host names and the create-site race, rebased on dev with #87 and #88):
+# rust 30 targets 2205 passed / 0 failed / 141 ignored. maran_agent 347->351, handshake 7->8, maran_ops 1322->1347,
+# sites_on_a_real_host ignored 26->34. Backend measured one by one with -m:1: Sites 176->188; Agent.Client 371,
+# Sdk 208 and ArchitectureTests 80 unchanged. Host.IntegrationTests not measured here; CI measures it.
 # RE-MEASURED 2026-10-27 (issues #87, #88, agent outage and contract revision, rebased on dev): rust 30 targets
 # 2175 passed / 0 failed / 133 ignored (maran_agent 347). Backend projects measured one by one with -m:1 because the
 # whole-solution run is OOM-killed on this workstation: Agent.Client 371, Backups 198, Cron 182, Sdk 208,
@@ -250,7 +254,7 @@
 # The header above was regenerated away by 'maran test spa --accept' and is restored here by
 # hand: the accept path rewrites this file from the run alone and keeps no prose, so every
 # re-measurement note in it is one --accept away from being lost. Worth fixing in the script.
-rust	maran_agent [unittests src/lib.rs]	347	0	0
+rust	maran_agent [unittests src/lib.rs]	351	0	0
 rust	maran_agent [unittests src/main.rs]	0	0	0
 rust	account_deletion_on_a_real_host [tests/account_deletion_on_a_real_host.rs]	0	0	5
 rust	account_identity_on_a_real_host [tests/account_identity_on_a_real_host.rs]	0	0	6
@@ -260,7 +264,7 @@ rust	cron_on_a_real_host [tests/cron_on_a_real_host.rs]	0	0	6
 rust	databases_on_a_real_host [tests/databases_on_a_real_host.rs]	0	0	8
 rust	firewall_on_a_real_host [tests/firewall_on_a_real_host.rs]	0	0	10
 rust	ftps_on_a_real_host [tests/ftps_on_a_real_host.rs]	0	0	15
-rust	handshake [tests/handshake.rs]	7	0	0
+rust	handshake [tests/handshake.rs]	8	0	0
 rust	monitor_on_a_real_host [tests/monitor_on_a_real_host.rs]	0	0	8
 rust	php_install_rpc [tests/php_install_rpc.rs]	6	0	0
 rust	php_pools_on_a_real_host [tests/php_pools_on_a_real_host.rs]	0	0	3
@@ -268,10 +272,10 @@ rust	privileges_on_a_real_host [tests/privileges_on_a_real_host.rs]	0	0	15
 rust	restore_recovery_on_a_real_host [tests/restore_recovery_on_a_real_host.rs]	0	0	4
 rust	sftp_on_a_real_host [tests/sftp_on_a_real_host.rs]	0	0	13
 rust	shutdown_signal [tests/shutdown_signal.rs]	3	0	0
-rust	sites_on_a_real_host [tests/sites_on_a_real_host.rs]	0	0	26
+rust	sites_on_a_real_host [tests/sites_on_a_real_host.rs]	0	0	34
 rust	maran_agent_core [unittests src/lib.rs]	404	0	0
 rust	maran_distro [unittests src/lib.rs]	42	0	0
-rust	maran_ops [unittests src/lib.rs]	1322	0	1
+rust	maran_ops [unittests src/lib.rs]	1347	0	1
 rust	maran_templates [unittests src/lib.rs]	13	0	0
 rust	golden_test [tests/golden_test.rs]	22	0	0
 rust	nginx_link_rule_test [tests/nginx_link_rule_test.rs]	9	0	0
@@ -296,7 +300,7 @@ backend	Maran.Modules.Accounts.Tests.dll	279	0	0
 backend	Maran.Modules.Databases.Tests.dll	101	0	0
 backend	Maran.Modules.Ssl.Tests.dll	159	0	0
 backend	Maran.Sdk.Tests.dll	208	0	0
-backend	Maran.Modules.Sites.Tests.dll	176	0	0
+backend	Maran.Modules.Sites.Tests.dll	188	0	0
 backend	Maran.ArchitectureTests.dll	80	0	0
 backend	Maran.Host.Tests.dll	281	0	0
 backend	Maran.Host.IntegrationTests.dll	415	0	0
