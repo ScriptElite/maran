@@ -93,8 +93,8 @@ public sealed class SiteHostnameRaceTests : IAsyncLifetime
         Assert.Equal(1, results.Count(result => { return result.IsSuccess; }));
 
         await using var reread = OpenContext(FirstAccount);
-        Assert.Equal(1, await reread.Sites.CountAsync(CancellationToken.None));
-        var claims = await reread.SiteHostnames.Select(hostname => hostname.Name).ToListAsync();
+        Assert.Equal(1, await reread.Sites.IgnoreQueryFilters().CountAsync(CancellationToken.None));
+        var claims = await reread.SiteHostnames.IgnoreQueryFilters().Select(hostname => hostname.Name).ToListAsync();
         Assert.Equal(claims.Count, claims.Distinct().Count());
     }
 
@@ -139,7 +139,7 @@ public sealed class SiteHostnameRaceTests : IAsyncLifetime
         Assert.Empty(agent.DeletedDomains);
 
         await using var reread = OpenContext(FirstAccount);
-        Assert.Equal(1, await reread.Sites.CountAsync(CancellationToken.None));
+        Assert.Equal(1, await reread.Sites.IgnoreQueryFilters().CountAsync(CancellationToken.None));
     }
 
     /// <summary>Two creations with disjoint names both succeed and nothing is removed.</summary>
@@ -160,8 +160,8 @@ public sealed class SiteHostnameRaceTests : IAsyncLifetime
         Assert.Empty(agent.DeletedDomains);
 
         await using var reread = OpenContext(FirstAccount);
-        Assert.Equal(2, await reread.Sites.CountAsync(CancellationToken.None));
-        Assert.Equal(4, await reread.SiteHostnames.CountAsync(CancellationToken.None));
+        Assert.Equal(2, await reread.Sites.IgnoreQueryFilters().CountAsync(CancellationToken.None));
+        Assert.Equal(4, await reread.SiteHostnames.IgnoreQueryFilters().CountAsync(CancellationToken.None));
     }
 
     /// <summary>A refusal by the agent as already served is answered domain taken and deletes nothing.</summary>
@@ -299,6 +299,11 @@ public sealed class SiteHostnameRaceTests : IAsyncLifetime
     }
 
     /// <summary>Opens a context on this test's own database as the given tenant.</summary>
+    /// <remarks>
+    /// The context applies that tenant's query filter, so a reread that counts BOTH tenants' rows calls
+    /// <c>IgnoreQueryFilters</c>: which tenant wins a race is up to the scheduler, and a filtered count
+    /// would see the winner only when it happened to be the tenant the context was opened as.
+    /// </remarks>
     /// <param name="accountId">The tenant whose filter the context applies.</param>
     /// <returns>The context, which the caller disposes.</returns>
     private SitesDbContext OpenContext(Guid accountId)
