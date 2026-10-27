@@ -42,7 +42,7 @@ pub trait CronHost: Send + Sync {
     /// privilege drop into a home) can be reached with a bare name: `root` and
     /// every other system user are refused here, before `crontab` is run.
     /// The proof is a fact about one moment and is never stored; operations that
-    /// hold [`cron_lock`](crate::cron::cron_lock::cron_lock) resolve it INSIDE
+    /// hold `cron_lock` (this crate's per-account cron lock) resolve it INSIDE
     /// the lock, so the resolution and the use are one critical section.
     ///
     /// Implementations MUST be called from `tokio::task::spawn_blocking`: they
