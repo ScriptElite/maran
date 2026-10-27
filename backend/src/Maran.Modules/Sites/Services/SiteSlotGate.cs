@@ -147,11 +147,14 @@ public sealed class SiteSlotGate : ISiteSlotGate
     /// A failed save leaves every entity it tried in the state it had, so without this the next save
     /// on this scoped context — any later write in the same request — would try the refused insert
     /// again and fail on the same key. Each claim is detached in its own right: detaching a principal
-    /// leaves its dependents tracked, and a claim left as Added would be inserted on its own.
+    /// leaves its dependents tracked, and a claim left as Added would be inserted on its own. The claims
+    /// are walked from a copy: detaching one makes EF Core's navigation fix-up remove it from
+    /// <see cref="Site.Hostnames"/>, which would end an enumeration of the live collection with
+    /// "Collection was modified" in place of the <see cref="DbUpdateException"/> the caller expects.
     /// </remarks>
     private void ForgetUnwritten(Site site)
     {
-        foreach (var hostname in site.Hostnames)
+        foreach (var hostname in site.Hostnames.ToList())
         {
             _dbContext.Entry(hostname).State = EntityState.Detached;
         }
