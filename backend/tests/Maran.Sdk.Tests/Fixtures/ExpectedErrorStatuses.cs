@@ -43,6 +43,8 @@ public static class ExpectedErrorStatuses
             ["AccountHomeGroupRepairCountInvalid"] = ErrorType.Validation,
             ["AccountHomeGroupRepairPlanChanged"] = ErrorType.Conflict,
             ["AccountLoginIssuanceFailed"] = ErrorType.Failure,
+            ["AccountNameInvalid"] = ErrorType.Validation,
+            ["AccountNameReserved"] = ErrorType.Validation,
             ["AccountNameTaken"] = ErrorType.Conflict,
             ["AccountNotFound"] = ErrorType.NotFound,
             ["AccountResumptionFailed"] = ErrorType.Failure,

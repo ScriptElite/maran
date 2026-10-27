@@ -18,6 +18,12 @@
   <data name="AccountNameTaken">
     <value>Это имя аккаунта уже занято.</value>
   </data>
+  <data name="AccountNameInvalid">
+    <value>Недопустимое имя аккаунта. Используйте от 3 до 30 строчных латинских букв, цифр или знаков подчёркивания, начиная с буквы.</value>
+  </data>
+  <data name="AccountNameReserved">
+    <value>Это имя аккаунта зарезервировано системой и не может быть использовано. Выберите другое имя.</value>
+  </data>
   <data name="AccountDomainTaken">
     <value>Этот домен уже используется другим аккаунтом.</value>
   </data>

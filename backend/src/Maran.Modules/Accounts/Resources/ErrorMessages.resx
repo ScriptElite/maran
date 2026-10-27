@@ -18,6 +18,12 @@
   <data name="AccountNameTaken">
     <value>This account name is already taken.</value>
   </data>
+  <data name="AccountNameInvalid">
+    <value>This account name is not valid. Use 3 to 30 lowercase letters, digits or underscores, starting with a letter.</value>
+  </data>
+  <data name="AccountNameReserved">
+    <value>This account name is reserved for the system and cannot be used. Choose another name.</value>
+  </data>
   <data name="AccountDomainTaken">
     <value>This domain is already used by another account.</value>
   </data>

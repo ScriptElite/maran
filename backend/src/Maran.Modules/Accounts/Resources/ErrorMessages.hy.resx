@@ -18,6 +18,12 @@
   <data name="AccountNameTaken">
     <value>Այս հաշվի անունն արդեն զբաղված է։</value>
   </data>
+  <data name="AccountNameInvalid">
+    <value>Հաշվի անվանումը անթույլատրելի է։ Օգտագործեք 3-ից 30 փոքրատառ լատինական տառ, թվանշան կամ ընդգծման նշան, սկսած տառով։</value>
+  </data>
+  <data name="AccountNameReserved">
+    <value>Այս անվանումը վերապահված է համակարգի համար և չի կարող օգտագործվել։ Ընտրեք այլ անվանում։</value>
+  </data>
   <data name="AccountDomainTaken">
     <value>Այս տիրույթն արդեն օգտագործվում է այլ հաշվի կողմից։</value>
   </data>
