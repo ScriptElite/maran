@@ -9,7 +9,7 @@
 /// facts of the distribution, supplied by the caller from its
 /// `DistroAdapter`, and this crate must not guess at either
 /// (rules/rust.md "Distro adapter").
-/// # A validator MUST be a check, and four of this workspace's twelve are not
+/// # A validator MUST be a check, and four of this workspace's validators are not
 ///
 /// `rules/rust.md` names step 5 "validate", and the examples it gives are all
 /// pure: `nginx -t`, `php-fpm -t`, `crontab -T`. A command that CHANGES the

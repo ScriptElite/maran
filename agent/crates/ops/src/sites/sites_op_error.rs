@@ -26,6 +26,46 @@ pub enum SitesOpError {
         domain: String,
     },
 
+    /// Another vhost on this host already serves a host name this site asked
+    /// for — its domain or one of its aliases — so the site was not created.
+    ///
+    /// Separate from [`SitesOpError::AlreadyExists`], which is the idempotent
+    /// answer to asking for THIS site again: that one is decided before
+    /// anything is written, by finding the site's own vhost. This one is
+    /// decided inside the config-write protocol, under its lock, either because
+    /// the site's own vhost appeared between that first look and the write (a
+    /// concurrent creation of the same domain won), or because `nginx -t`,
+    /// reading the whole tree with the new vhost in it, warned that one of its
+    /// names is already served elsewhere. nginx exits 0 on that warning and
+    /// would otherwise answer the name from whichever file sorts first; the
+    /// write treats it as a refusal instead. Either way nothing of the new
+    /// vhost is left behind.
+    #[error("a host name of this site is already served on this host: {detail}")]
+    ServerNameTaken {
+        /// What refused: the vhost path that already existed, or nginx's own
+        /// warning naming the host.
+        detail: String,
+        /// The validator's standard error, for an operator's log; empty when
+        /// the refusal was an existing file and no validator ran.
+        stderr: String,
+    },
+
+    /// The site asked for one host name twice — an alias equal to the domain,
+    /// or the same alias repeated — so nothing was created.
+    ///
+    /// Refused before anything is read or written, as the caller's input, and
+    /// separate from [`SitesOpError::ServerNameTaken`] on purpose: nginx warns
+    /// about a name repeated inside ONE server block in exactly the words it
+    /// uses for a name two vhosts share, so without this check the creation
+    /// would reach the vhost, be refused there, and be reported as a name
+    /// another site already holds — leaving the document root behind and
+    /// telling the panel something untrue about the host.
+    #[error("the host name '{name}' is asked for more than once")]
+    RepeatedHostName {
+        /// The name that appeared more than once.
+        name: String,
+    },
+
     /// No site with this domain is configured on this host.
     #[error("site '{domain}' was not found")]
     NotFound {
@@ -138,13 +178,25 @@ impl From<SafeWriteError> for SitesOpError {
     ///
     /// The two failures an operator acts on differently — the validator
     /// refusing the content, and nginx refusing to reload valid content — keep
-    /// their own variants and their tool output; everything else collapses
-    /// into [`SitesOpError::ConfigWrite`], whose `Display` still carries the
+    /// their own variants and their tool output, and so do a creation's two
+    /// refusals, which both become [`SitesOpError::ServerNameTaken`]: in this
+    /// area the only creation is a vhost, the only warning it refuses is nginx
+    /// reporting a host name served twice, and an existing target is the
+    /// site's own domain already served. Everything else collapses into
+    /// [`SitesOpError::ConfigWrite`], whose `Display` still carries the
     /// original chain, including a rollback that did not happen.
     fn from(error: SafeWriteError) -> Self {
         match error {
             SafeWriteError::ValidationFailed { stderr } => Self::NginxValidation { stderr },
             SafeWriteError::ReloadFailed { stderr } => Self::ReloadFailed { stderr },
+            SafeWriteError::TargetExists { target } => Self::ServerNameTaken {
+                detail: format!("a vhost already exists at {target}"),
+                stderr: String::new(),
+            },
+            SafeWriteError::RefusedWarning { warning, stderr } => Self::ServerNameTaken {
+                detail: warning,
+                stderr,
+            },
             other => Self::ConfigWrite {
                 reason: other.to_string(),
             },

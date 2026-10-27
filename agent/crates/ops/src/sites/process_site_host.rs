@@ -12,7 +12,9 @@ use maran_agent_core::validation::fs::path::resolve_in_home;
 use maran_agent_core::validation::system::name::AccountName;
 
 use crate::safe_write::model::{Reload, Validator};
-use crate::safe_write::{CommandOutcome, ConfigHost, SafeWriteError, remove_config, write_config};
+use crate::safe_write::{
+    CommandOutcome, ConfigHost, SafeWriteError, create_config, remove_config, write_config,
+};
 use crate::sites::follow_log::follow_log;
 use crate::sites::log_sink::LogSink;
 use crate::sites::model::log_tail_request::LogTailRequest;
@@ -194,6 +196,26 @@ impl SiteHost for ProcessSiteHost {
         reload: &Reload<'_>,
     ) -> Result<(), SitesOpError> {
         Ok(write_config(self, target, contents, validator, reload)?)
+    }
+
+    /// Delegates to the creation half of the same protocol, again passing
+    /// itself as the [`ConfigHost`].
+    fn create_config(
+        &self,
+        target: &Path,
+        contents: &str,
+        validator: &Validator<'_>,
+        reload: &Reload<'_>,
+        refused_warnings: &[String],
+    ) -> Result<(), SitesOpError> {
+        Ok(create_config(
+            self,
+            target,
+            contents,
+            validator,
+            reload,
+            refused_warnings,
+        )?)
     }
 
     /// Delegates to the removal half of the same protocol.

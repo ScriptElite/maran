@@ -137,6 +137,30 @@ pub trait SiteHost: Send + Sync {
         reload: &Reload<'_>,
     ) -> Result<(), SitesOpError>;
 
+    /// Creates `target` with `contents` through the creation half of the
+    /// config-write protocol: refused untouched when the target already
+    /// exists, and refused — with the new file removed again — when `validator`
+    /// exits 0 but its standard error contains any of `refused_warnings`. The
+    /// one implementation delegates to `crate::safe_write::create_config` and
+    /// adds nothing of its own.
+    ///
+    /// A method of its own rather than a flag on [`Self::write_config`]: only
+    /// `create_site` introduces a vhost, and every other writer of one must
+    /// keep replacing the file it re-renders.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SitesOpError::ServerNameTaken`] for either refusal, and
+    /// otherwise exactly what [`Self::write_config`] returns.
+    fn create_config(
+        &self,
+        target: &Path,
+        contents: &str,
+        validator: &Validator<'_>,
+        reload: &Reload<'_>,
+        refused_warnings: &[String],
+    ) -> Result<(), SitesOpError>;
+
     /// Removes `target` through the same protocol, validating and reloading
     /// after the unlink and putting the file back if either refuses.
     ///

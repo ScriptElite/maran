@@ -142,6 +142,12 @@ fn every_validator_is_a_check_except_the_four_that_have_no_check_mode() {
                 "distro.service_manager()".to_owned()
             ),
             // Pure — the web server's own validate-only flag, over the real tree.
+            // `create_vhost` is the creation twin of `write_vhost`: same binary,
+            // and its caller also reads the validator's stderr for a warning.
+            (
+                "sites/create_vhost.rs".to_owned(),
+                "distro.nginx_binary()".to_owned()
+            ),
             (
                 "sites/reload_web_server.rs".to_owned(),
                 "distro.nginx_binary()".to_owned()

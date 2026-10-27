@@ -438,6 +438,12 @@ enum WebTreeReconciliation {
 /// `the_only_startup_reconciliations_are_the_restores_the_web_tree_and_the_php_pools`
 /// goes red the day one of the three gains a pass.
 ///
+/// A second blind spot sits inside the tree it does read: a site creation
+/// killed between the rename of its vhost and the check of `nginx -t`'s warning
+/// that one of its names is already served leaves a colliding vhost live, and
+/// this pass cannot catch it, because that tree validates with exit 0 — the
+/// warning is not this pass's refusal — so it reloads the colliding file.
+///
 /// # Why it never refuses the start
 ///
 /// This process is the operator's only remote repair tool. Refusing to start
@@ -458,7 +464,10 @@ fn reconcile_web_tree(
                  reloaded onto it. UNOBSERVED HERE: the SFTP and FTPS jail mount units \
                  and vsftpd.conf — those three trees have no validator that can be run \
                  without also acting on the daemon. The php-fpm pool trees ARE observed, \
-                 by reconcile_php_pool_trees, one outcome per installed version"
+                 by reconcile_php_pool_trees, one outcome per installed version. ALSO \
+                 UNOBSERVED HERE: a vhost left by a site creation killed mid-write whose \
+                 host name another vhost already serves, which nginx -t reports as a \
+                 warning and exit 0"
             );
             WebTreeReconciliation::Applied
         }

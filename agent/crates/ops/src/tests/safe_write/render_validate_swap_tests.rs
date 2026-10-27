@@ -269,6 +269,37 @@ fn a_config_that_validates_replaces_the_previous_one_and_reloads_once() {
     );
 }
 
+#[test]
+fn a_replacement_does_not_refuse_a_warning_the_validator_prints() {
+    // The inverse of the creation's refusal: a re-render of a vhost that is
+    // already served is the same file answering for its own names, and a
+    // warning the validator prints about a name must not stop it. Only
+    // `create_config` is given warnings to refuse.
+    let directory = tempfile::tempdir().unwrap();
+    let target = directory.path().join("site.conf");
+    std::fs::write(&target, b"server { listen 80; }\n").unwrap();
+    let host = FakeConfigHost {
+        validation_stderr:
+            "nginx: [warn] conflicting server name \"alice.test\" on 0.0.0.0:80, ignored".to_owned(),
+        ..FakeConfigHost::passing()
+    };
+
+    let written = write_config(
+        &host,
+        &target,
+        "server { listen 80; index x; }\n",
+        &validator(),
+        &reload(),
+    );
+
+    assert!(written.is_ok(), "{written:?}");
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        b"server { listen 80; index x; }\n"
+    );
+    assert_eq!(host.calls().len(), 2, "validator then reload");
+}
+
 /// A [`ConfigHost`] that reads the target at the instant the validator is
 /// invoked, which is exactly the midpoint the kill exposes.
 ///

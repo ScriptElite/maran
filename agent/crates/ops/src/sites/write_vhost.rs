@@ -18,8 +18,10 @@ pub(crate) const VALIDATE_ARGUMENT: &str = "-t";
 
 /// Writes `contents` to `target` with the nginx validator and reload attached.
 ///
-/// Every site operation that produces a configuration goes through here, so
-/// the validator and the reload command are chosen once. Both come from the
+/// Every site operation that REPLACES a configuration goes through here; the
+/// one that introduces a vhost, `create_site`, goes through `create_vhost`,
+/// which builds the same validator and reload from the same constants. Both
+/// come from the
 /// [`DistroAdapter`] — the binary path and the service name differ between
 /// families, and an operation that wrote either as a literal would be guessing
 /// (rules/rust.md "Distro adapter").

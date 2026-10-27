@@ -13,6 +13,7 @@
 //! a process that has dropped to that account (rules/security.md).
 
 mod create_site;
+mod create_vhost;
 // The site tests' in-memory host and inputs, declared ONCE here rather than in
 // each `*_tests.rs`: a file loaded as a module twice is compiled twice, and
 // each copy's unused half is then dead code in the other's eyes. Private to

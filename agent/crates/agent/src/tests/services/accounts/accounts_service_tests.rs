@@ -542,6 +542,18 @@ impl SiteHost for UnusedSiteHost {
     }
 
     /// Unreachable: see [`UnusedSiteHost`].
+    fn create_config(
+        &self,
+        _target: &Path,
+        _contents: &str,
+        _validator: &Validator<'_>,
+        _reload: &Reload<'_>,
+        _refused_warnings: &[String],
+    ) -> Result<(), SitesOpError> {
+        unreachable!("no rpc in this file reaches the site host")
+    }
+
+    /// Unreachable: see [`UnusedSiteHost`].
     fn remove_config(
         &self,
         _target: &Path,

@@ -68,6 +68,21 @@ pub(crate) struct FakeSiteHost {
     /// Whether listing the vhost directory refuses, so a test can drive the
     /// one case where an empty answer and a blind one look alike.
     listing_refused: Mutex<bool>,
+    /// The targets `write_config` (the REPLACING half) was asked for — kept
+    /// apart from `create_targets` so a test can tell which half of the
+    /// protocol an operation chose.
+    replaced_targets: Mutex<Vec<PathBuf>>,
+    /// The targets `create_config` (the CREATING half) was asked for.
+    create_targets: Mutex<Vec<PathBuf>>,
+    /// The warnings each creation asked to refuse, in call order.
+    create_refusals: Mutex<Vec<Vec<String>>>,
+    /// The validator each creation was handed, as `(program, arguments)`.
+    create_validators: Mutex<Vec<(String, Vec<String>)>>,
+    /// The reload each creation was handed, as `(program, arguments)`.
+    create_reloads: Mutex<Vec<(String, Vec<String>)>>,
+    /// A vhost that appears the moment its path is next READ, as a concurrent
+    /// creation's write would: that read still answers "absent".
+    appears_after_read: Mutex<Option<(PathBuf, String)>>,
 }
 
 impl FakeSiteHost {
@@ -82,7 +97,45 @@ impl FakeSiteHost {
             log_lines: Mutex::new(Vec::new()),
             tailed: Mutex::new(None),
             listing_refused: Mutex::new(false),
+            replaced_targets: Mutex::new(Vec::new()),
+            create_targets: Mutex::new(Vec::new()),
+            create_refusals: Mutex::new(Vec::new()),
+            create_validators: Mutex::new(Vec::new()),
+            create_reloads: Mutex::new(Vec::new()),
+            appears_after_read: Mutex::new(None),
         }
+    }
+
+    /// Arranges for `contents` to appear at `path` right after the next read
+    /// of it, which still answers "absent" — the interleaving of a second
+    /// creation winning between this one's existence check and its write.
+    pub(crate) fn place_config_after_next_read(&self, path: &Path, contents: &str) {
+        *self.appears_after_read.lock().unwrap() = Some((path.to_path_buf(), contents.to_owned()));
+    }
+
+    /// The targets the REPLACING half of the protocol was asked for.
+    pub(crate) fn replaced_targets(&self) -> Vec<PathBuf> {
+        self.replaced_targets.lock().unwrap().clone()
+    }
+
+    /// The targets the CREATING half of the protocol was asked for.
+    pub(crate) fn create_targets(&self) -> Vec<PathBuf> {
+        self.create_targets.lock().unwrap().clone()
+    }
+
+    /// The warnings each creation asked to refuse, in call order.
+    pub(crate) fn create_refusals(&self) -> Vec<Vec<String>> {
+        self.create_refusals.lock().unwrap().clone()
+    }
+
+    /// The validator each creation was handed, as `(program, arguments)`.
+    pub(crate) fn create_validators(&self) -> Vec<(String, Vec<String>)> {
+        self.create_validators.lock().unwrap().clone()
+    }
+
+    /// The reload each creation was handed, as `(program, arguments)`.
+    pub(crate) fn create_reloads(&self) -> Vec<(String, Vec<String>)> {
+        self.create_reloads.lock().unwrap().clone()
     }
 
     /// Makes listing the vhost directory refuse.
@@ -124,6 +177,25 @@ impl FakeSiteHost {
         *self.writes.lock().unwrap()
     }
 
+    /// Runs the fake validator over a write and, when it accepts, stores
+    /// `contents` — the one body both halves of the protocol share.
+    fn accept(&self, target: &Path, contents: &str) -> Result<(), SitesOpError> {
+        *self.writes.lock().unwrap() += 1;
+
+        let (status, stderr) = self.validation.lock().unwrap().clone();
+        if status != 0 {
+            // The real protocol restores the previous content before
+            // returning, so the fake leaves the map untouched.
+            return Err(SitesOpError::NginxValidation { stderr });
+        }
+
+        self.files
+            .lock()
+            .unwrap()
+            .insert(target.to_path_buf(), contents.to_owned());
+        Ok(())
+    }
+
     /// The directories the host was asked to create as the account.
     pub(crate) fn created(&self) -> Vec<PathBuf> {
         self.created.lock().unwrap().clone()
@@ -148,7 +220,18 @@ impl SiteHost for FakeSiteHost {
     }
 
     fn read_config(&self, path: &Path) -> Result<Option<String>, SitesOpError> {
-        Ok(self.config(path))
+        let answer = self.config(path);
+
+        let appeared = self
+            .appears_after_read
+            .lock()
+            .unwrap()
+            .take_if(|pending| pending.0.as_path() == path);
+        if let Some((held, contents)) = appeared {
+            self.files.lock().unwrap().insert(held, contents);
+        }
+
+        Ok(answer)
     }
 
     fn write_config(
@@ -158,20 +241,52 @@ impl SiteHost for FakeSiteHost {
         _validator: &Validator<'_>,
         _reload: &Reload<'_>,
     ) -> Result<(), SitesOpError> {
-        *self.writes.lock().unwrap() += 1;
-
-        let (status, stderr) = self.validation.lock().unwrap().clone();
-        if status != 0 {
-            // The real protocol restores the previous content before
-            // returning, so the fake leaves the map untouched.
-            return Err(SitesOpError::NginxValidation { stderr });
-        }
-
-        self.files
+        self.replaced_targets
             .lock()
             .unwrap()
-            .insert(target.to_path_buf(), contents.to_owned());
-        Ok(())
+            .push(target.to_path_buf());
+
+        self.accept(target, contents)
+    }
+
+    /// The creation half: refused untouched when the target is already held,
+    /// otherwise stored exactly as [`Self::write_config`] stores. The
+    /// warnings are RECORDED, not modelled — this fake runs no validator to
+    /// print one; the protocol's own tests in `safe_write` drive that refusal.
+    fn create_config(
+        &self,
+        target: &Path,
+        contents: &str,
+        validator: &Validator<'_>,
+        reload: &Reload<'_>,
+        refused_warnings: &[String],
+    ) -> Result<(), SitesOpError> {
+        self.create_targets
+            .lock()
+            .unwrap()
+            .push(target.to_path_buf());
+        self.create_refusals
+            .lock()
+            .unwrap()
+            .push(refused_warnings.to_vec());
+        self.create_validators
+            .lock()
+            .unwrap()
+            .push(command_line(validator.program, validator.arguments));
+        self.create_reloads
+            .lock()
+            .unwrap()
+            .push(command_line(reload.program, reload.arguments));
+
+        if self.files.lock().unwrap().contains_key(target) {
+            *self.writes.lock().unwrap() += 1;
+            return Err(SitesOpError::ServerNameTaken {
+                detail: format!("a vhost already exists at {}", target.display()),
+                stderr: String::new(),
+            });
+        }
+
+        self.accept(target, contents)
     }
 
     fn remove_config(
@@ -264,6 +379,18 @@ impl SiteMaintenanceHost for FakeSiteHost {
 
         Ok(TailEnd::ClientClosed)
     }
+}
+
+/// A program and its arguments as owned strings, the shape the recorded
+/// commands are compared in.
+fn command_line(program: &str, arguments: &[&str]) -> (String, Vec<String>) {
+    (
+        program.to_owned(),
+        arguments
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect(),
+    )
 }
 
 /// The adapter every test in this file runs against. Which family is

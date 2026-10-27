@@ -138,6 +138,25 @@ impl SiteHost for ProcessSslHost {
     }
 
     /// Delegates to the site area's host.
+    ///
+    /// Present because [`SiteHost`] requires it, and reached by nothing in the
+    /// certificate area: installing or removing a certificate re-renders a
+    /// vhost that already exists, which is a replacement. Delegated rather than
+    /// refused so that this host stays the site host plus certificate work and
+    /// nothing less.
+    fn create_config(
+        &self,
+        target: &Path,
+        contents: &str,
+        validator: &Validator<'_>,
+        reload: &Reload<'_>,
+        refused_warnings: &[String],
+    ) -> Result<(), SitesOpError> {
+        self.sites
+            .create_config(target, contents, validator, reload, refused_warnings)
+    }
+
+    /// Delegates to the site area's host.
     fn remove_config(
         &self,
         target: &Path,

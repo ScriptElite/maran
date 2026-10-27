@@ -357,6 +357,24 @@ impl SiteHost for FakeSslHost {
         written
     }
 
+    fn create_config(
+        &self,
+        target: &Path,
+        contents: &str,
+        validator: &Validator<'_>,
+        reload: &Reload<'_>,
+        refused_warnings: &[String],
+    ) -> Result<(), SitesOpError> {
+        let written =
+            self.sites
+                .create_config(target, contents, validator, reload, refused_warnings);
+        if written.is_ok() {
+            self.events.lock().unwrap().push(Event::VhostWritten);
+        }
+
+        written
+    }
+
     fn remove_config(
         &self,
         target: &Path,

@@ -32,12 +32,12 @@ use maran_agent::proto::{
     EnableFtpsRequest, EnableFtpsResponse, ErrorCode, GetAccountSuspensionStateRequest,
     GetAccountUsageRequest, GetAgentInfoRequest, GetCronEnvironmentRequest, GetFtpsStatusRequest,
     InstallCertificateRequest, InstallPhpVersionRequest, ListCronEntriesRequest,
-    ListDatabasesRequest, ListPhpVersionsRequest, SetFtpsPasswordRequest, create_account_response,
-    create_database_response, create_ftps_user_response, create_sftp_user_response,
-    delete_entry_response, delete_ftps_user_response, enable_ftps_response,
-    get_account_suspension_state_response, get_account_usage_response, get_agent_info_response,
-    get_cron_environment_response, get_ftps_status_response, list_cron_entries_response,
-    set_ftps_password_response,
+    ListDatabasesRequest, ListPhpVersionsRequest, SetFtpsPasswordRequest, SiteBackendType,
+    create_account_response, create_database_response, create_ftps_user_response,
+    create_sftp_user_response, create_site_response, delete_entry_response,
+    delete_ftps_user_response, enable_ftps_response, get_account_suspension_state_response,
+    get_account_usage_response, get_agent_info_response, get_cron_environment_response,
+    get_ftps_status_response, list_cron_entries_response, set_ftps_password_response,
 };
 
 /// How long the test waits for the server to bind before declaring it stuck.
@@ -437,6 +437,61 @@ async fn the_database_and_sftp_services_answer_over_the_wire_with_a_typed_refusa
         "DbService.ListDatabases must be registered, got {:?}",
         listing.err()
     );
+
+    server.abort();
+}
+
+/// The agent half of a panel request that names one host twice: refused over the wire as invalid
+/// input, before any host access, so the test needs no root and no nginx and is valid on any machine.
+///
+/// The twin on the panel side treats `ALREADY_EXISTS` as "another vhost serves a name", which is a
+/// different answer: this one is the caller's own mistake, and mapping it to `ALREADY_EXISTS` would
+/// tell the panel to report a taken domain for a request that can never succeed.
+#[tokio::test]
+async fn a_create_site_naming_one_host_twice_is_refused_over_the_wire_as_invalid_input() {
+    let directory = tempfile::tempdir().unwrap();
+    let socket_path = directory.path().join("agent.sock");
+
+    let policy = PeerPolicy::new(maran_agent_core::utils::current_uid::current_uid().unwrap());
+    let server_path = socket_path.clone();
+    let mut server =
+        tokio::spawn(async move { maran_agent::server::serve(&server_path, policy).await });
+
+    match wait_until_listening(&socket_path, &mut server).await {
+        Started::Listening => {}
+        Started::UnsupportedHost(reason) => {
+            eprintln!("skipping the repeated host name test: {reason}");
+            return;
+        }
+    }
+
+    let channel = connect(&socket_path).await;
+
+    // The alias differs from the domain only in case, which proves the comparison runs after the
+    // domain type has lower-cased both: a byte-wise comparison of the raw strings would let it through.
+    let response = SitesServiceClient::new(channel)
+        .create_site(CreateSiteRequest {
+            account_username: "polyrep".to_owned(),
+            domain: "rep.test".to_owned(),
+            aliases: vec!["REP.test".to_owned()],
+            backend_type: SiteBackendType::Static as i32,
+            ..CreateSiteRequest::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    match response.result {
+        Some(create_site_response::Result::Error(error)) => {
+            assert_eq!(
+                error.code,
+                ErrorCode::InvalidInput as i32,
+                "a request repeating a host name is the caller's mistake, not a taken name: {}",
+                error.message
+            );
+        }
+        other => panic!("CreateSite must answer with a typed refusal, got {other:?}"),
+    }
 
     server.abort();
 }

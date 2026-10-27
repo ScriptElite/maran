@@ -4,9 +4,12 @@
 /// system configuration file.
 ///
 /// Every variant from [`Self::ValidationFailed`] onward is a point at which
-/// [`super::render_validate_swap::write_config`] has already put the previous
+/// the shared body of [`super::render_validate_swap::write_config`] and
+/// [`super::create_config::create_config`] has already put the previous
 /// content back — the variant tells an operator which step refused, not
-/// whether the target file is now safe. Two are exceptions.
+/// whether the target file is now safe. [`Self::TargetExists`] stands before
+/// that line because it is refused before anything is touched. Two of the
+/// later ones are exceptions.
 /// [`Self::RollbackFailed`] means the restoration itself did not happen, which
 /// is why it carries both errors rather than collapsing into the first one.
 /// [`Self::SpawnFailed`] says the step did not refuse at all — its program
@@ -48,10 +51,25 @@ pub enum SafeWriteError {
     /// The atomic rename of the temporary file onto the target failed.
     ///
     /// A failed rename does not modify the target — either the whole
-    /// directory entry moves or it does not — so this is the last variant
-    /// that needs no rollback of its own.
+    /// directory entry moves or it does not — so it needs no rollback of its
+    /// own. Neither does [`Self::TargetExists`] below it, the last variant
+    /// for which nothing was touched.
     #[error("could not swap the new configuration into place")]
     Rename,
+
+    /// A creation found its target already there, so it changed nothing.
+    ///
+    /// Only [`super::create_config::create_config`] produces it: a replacement
+    /// replaces by definition. Reached either at the capture, under the
+    /// config-tree lock, or at the rename, which a creation makes without
+    /// replacing so that a file appearing in between is refused by the kernel.
+    /// In both cases the file at the target is somebody else's and is left
+    /// exactly as it was.
+    #[error("a configuration already exists at {target}")]
+    TargetExists {
+        /// The path that was already taken, for an operator's log.
+        target: String,
+    },
 
     /// The validating tool (`nginx -t`, `php-fpm -t`, …) rejected the
     /// rendered configuration.
@@ -61,6 +79,22 @@ pub enum SafeWriteError {
     /// unaffected.
     #[error("configuration validation failed: {stderr}")]
     ValidationFailed {
+        /// The validator's standard error, for an operator's log.
+        stderr: String,
+    },
+
+    /// The validator exited 0, but its standard error carried a warning the
+    /// caller named as a refusal.
+    ///
+    /// Only [`super::create_config::create_config`] produces it. It exists
+    /// because a zero exit is not every validator's whole verdict: `nginx -t`
+    /// accepts a tree in which two vhosts name the same host, warning that it
+    /// ignored one of them. The new file has been removed, so the tree is as
+    /// it was before the write.
+    #[error("configuration validation passed with a refused warning: {warning}")]
+    RefusedWarning {
+        /// The warning, exactly as the caller named it.
+        warning: String,
         /// The validator's standard error, for an operator's log.
         stderr: String,
     },

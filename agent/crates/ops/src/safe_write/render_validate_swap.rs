@@ -5,6 +5,7 @@ use std::io::Write as _;
 use std::path::Path;
 
 use crate::safe_write::config_tree_lock::config_tree_lock;
+use crate::safe_write::model::write_intent::WriteIntent;
 use crate::safe_write::model::{Reload, Validator};
 use crate::safe_write::{ConfigHost, RollbackGuard, SafeWriteError};
 
@@ -97,6 +98,62 @@ pub fn write_config(
     validator: &Validator<'_>,
     reload: &Reload<'_>,
 ) -> Result<(), SafeWriteError> {
+    swap_in(
+        host,
+        target,
+        contents,
+        validator,
+        reload,
+        &WriteIntent::Replace,
+    )
+}
+
+/// The protocol itself, shared by [`write_config`] and
+/// [`super::create_config::create_config`] so the two cannot drift: one body,
+/// and `intent` decides the only two things that differ between replacing a
+/// configuration and introducing a new one.
+///
+/// For [`WriteIntent::Create`] those two things are, in order:
+///
+/// - **The target must not exist.** Asked twice, and both answers are needed.
+///   The capture below runs under the config-tree lock, so it is the answer for
+///   every writer in this process; the rename is then `persist_noclobber`
+///   (`renameat2(RENAME_NOREPLACE)`, or a link-then-unlink where the
+///   filesystem has no such flag), so a file that appeared since — written by
+///   something this process-local lock does not reach — is refused by the
+///   kernel rather than overwritten. Either refusal is
+///   [`SafeWriteError::TargetExists`] with nothing touched.
+/// - **A validator that passed may still refuse.** A validator's exit status is
+///   not its whole verdict: `nginx -t` exits 0 on a tree in which two vhosts
+///   name the same host and only WARNS that it ignored one of them. After a
+///   zero exit, the validator's stderr is searched for each of
+///   `refused_warnings`, and the first one present refuses the write with
+///   [`SafeWriteError::RefusedWarning`] — after the rollback, exactly as a
+///   non-zero exit would. The search runs inside the same critical section as
+///   the rename, which is what makes it race-free: two creations that would
+///   collide are serialised by the lock, and the second one's validator reads
+///   a tree that already holds the first.
+///
+/// The warning check inherits the midpoint [`write_config`] describes, and is
+/// worse off in it than the exit status is: a process killed between the rename
+/// and this check leaves the new file live, and the startup pass that
+/// re-validates the web tree (`agent::server::reconcile_web_tree`) cannot catch
+/// it, because the tree it reads exits 0 — the warning is not that pass's
+/// refusal. It reloads the colliding file. Nothing on the host knows which of
+/// two files naming one host is the newcomer, so this is stated rather than
+/// repaired.
+///
+/// # Errors
+///
+/// As [`write_config`], plus the two refusals above for a creation.
+pub(super) fn swap_in(
+    host: &dyn ConfigHost,
+    target: &Path,
+    contents: &str,
+    validator: &Validator<'_>,
+    reload: &Reload<'_>,
+    intent: &WriteIntent<'_>,
+) -> Result<(), SafeWriteError> {
     // Held for the whole sequence below, and released when this function
     // returns. Taken BEFORE the capture, because a capture taken outside it is
     // a capture of a state another writer can have replaced by the time this
@@ -107,6 +164,15 @@ pub fn write_config(
     // this line is allowed to lose the ability to answer "what was here
     // before".
     let previous = read_existing(target)?;
+
+    // A creation never replaces. Refused here, under the lock and before a
+    // temporary file exists, so the refusal leaves the directory exactly as it
+    // was found.
+    if matches!(intent, WriteIntent::Create { .. }) && previous.is_some() {
+        return Err(SafeWriteError::TargetExists {
+            target: target.display().to_string(),
+        });
+    }
 
     // Write the new content to a temporary file in the SAME DIRECTORY as the
     // target: a rename within one directory is atomic, a rename across
@@ -139,13 +205,26 @@ pub fn write_config(
 
     // Atomically rename the temporary file over the target. This happens
     // BEFORE validation — see the doc comment above for why that is the safe
-    // order rather than a shortcut.
-    if let Err(persist_error) = temp.persist(target) {
+    // order rather than a shortcut. A creation renames without replacing, so
+    // the kernel refuses a target that appeared after the capture above.
+    let persisted = match intent {
+        WriteIntent::Replace => temp.persist(target).map(drop),
+        WriteIntent::Create { .. } => temp.persist_noclobber(target).map(drop),
+    };
+    if let Err(persist_error) = persisted {
         // `persist` on failure returns the temp file back to us; let it drop
         // and clean itself up. The target was never touched by a failed
-        // rename, so there is nothing for the guard to undo.
+        // rename, so there is nothing for the guard to undo — and when the
+        // rename failed because the target EXISTS, the file there is somebody
+        // else's, which is one more reason the guard must not touch it.
+        let already_there = persist_error.error.kind() == std::io::ErrorKind::AlreadyExists;
         drop(persist_error);
         guard.commit();
+        if already_there {
+            return Err(SafeWriteError::TargetExists {
+                target: target.display().to_string(),
+            });
+        }
         return Err(SafeWriteError::Rename);
     }
 
@@ -159,6 +238,24 @@ pub fn write_config(
         return finish_with_rollback(
             &mut guard,
             SafeWriteError::ValidationFailed {
+                stderr: validation.stderr,
+            },
+        );
+    }
+
+    // A zero exit is the validator's whole verdict only for a replacement. A
+    // creation also refuses the warnings its caller named, because the one
+    // that matters here — nginx ignoring a duplicated server name — is printed
+    // by a validator that then exits 0.
+    if let WriteIntent::Create { refused_warnings } = intent
+        && let Some(warning) = refused_warnings
+            .iter()
+            .find(|warning| validation.stderr.contains(warning.as_str()))
+    {
+        return finish_with_rollback(
+            &mut guard,
+            SafeWriteError::RefusedWarning {
+                warning: warning.clone(),
                 stderr: validation.stderr,
             },
         );
