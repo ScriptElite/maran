@@ -9,9 +9,13 @@ namespace Maran.Agent.Client.Interfaces;
 /// domain.
 /// </summary>
 /// <remarks>
-/// Every method returns a <see cref="Result{T}"/> rather than throwing: a site that already exists,
-/// or one the agent cannot find, is an answer the caller acts on, not an exception (rules/csharp.md
-/// "Errors: Result, not exceptions"). The operations that re-render a vhost take a
+/// Every unary method returns a <see cref="Result{T}"/> rather than throwing: a site that already
+/// exists, or one the agent cannot find, is an answer the caller acts on, not an exception
+/// (rules/csharp.md "Errors: Result, not exceptions"). An agent that cannot be reached at all is
+/// answered the same way, as <c>AgentUnavailable</c>, by the resilience decorator the Host registers
+/// over this contract; the implementation in this project lets the transport's exception out, so
+/// that decorator's retry can see it (<see cref="Errors.AgentTransportFailure"/>). The operations that
+/// re-render a vhost take a
 /// <see cref="SiteDescriptor"/>, because the panel's database — not the file on disk — is what a
 /// site is.
 /// </remarks>
@@ -112,9 +116,12 @@ public interface IAgentSitesClient
     /// <param name="cancellationToken">Cancellation for the stream.</param>
     /// <returns>
     /// The lines, followed by exactly one terminal event naming how the stream ended — completed,
-    /// dropped, idle, failed, or cancelled by the caller. The sequence never ends without one, so a
-    /// caller cannot mistake a dropped, idle or abandoned stream for a log that simply had nothing
-    /// more to say.
+    /// dropped, idle, failed, or cancelled by the caller. The sequence never ends quietly without one,
+    /// so a caller cannot mistake a dropped, idle or abandoned stream for a log that simply had nothing
+    /// more to say. A failure of the transport itself (an agent that cannot be reached, a connection
+    /// torn mid-stream) is a failed terminal event carrying <c>AgentUnavailable</c>, never an exception;
+    /// a cancellation that interrupts a read in progress surfaces as
+    /// <see cref="OperationCanceledException"/>.
     /// </returns>
     IAsyncEnumerable<SiteLogEvent> TailLogAsync(
         string accountUsername,
