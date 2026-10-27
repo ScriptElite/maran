@@ -5,6 +5,20 @@ than a strict category list: what changed and why it matters to somebody running
 
 ## Unreleased
 
+**The panel refuses to start on a published or weak key outside Development and Testing.** The
+repository's sample `.env.example` ships an encryption key and a token-signing key so a development
+loop works out of the box, and nothing stopped an install from running on them: measured with the
+published host and `ASPNETCORE_ENVIRONMENT=Production`, the panel booted on both sample keys, so
+anyone who has read the source could sign an administrator's access token or decrypt the secrets the
+panel stores. Outside Development and Testing the host now refuses to start when either key is the
+published sample, decodes to bytes too structured to be random, or when the signing key equals or
+contains the encryption key; the message names the setting and the problem and never prints the key.
+
+Installs made by the installer are not affected: it generates two separate random keys. A hand-seeded
+install that copied the sample stops at startup. Replacing the signing key costs nothing but a fresh
+sign-in; replacing the encryption key makes the values already encrypted under it unreadable, and
+there is no re-encryption tool yet.
+
 **Installing a PHP version from the panel failed, and could leave the package database broken.** The
 agent ran the package manager itself, inside a sandbox that keeps `/usr` read-only. On Ubuntu 24.04
 the install died on "Read-only file system" part-way through and left fifteen packages half-configured
