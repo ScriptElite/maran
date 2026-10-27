@@ -104,7 +104,8 @@ async fn the_reported_revision_is_never_zero() {
 
 /// The contract baseline `maran proto --accept` records, read as the bytes the
 /// reviewer sees in the diff.
-const CONTRACT_BASELINE: &str = include_str!("../../../../../../../proto/agent/v1/contract-baseline.txt");
+const CONTRACT_BASELINE: &str =
+    include_str!("../../../../../../../proto/agent/v1/contract-baseline.txt");
 
 /// Every revision of the contract and the digest of the baseline that revision
 /// was recorded with, oldest first. Revision 1 names no contract and has no
