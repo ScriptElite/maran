@@ -20,6 +20,43 @@ PHP installs with a "unit not found" error, and there is no in-process fallback.
 provisions no Remi or Sury repository, so RHEL-family hosts and Debian releases without the version in
 the distribution archive cannot install it regardless of this change.
 
+**The root daemon no longer acts on accounts it did not create.** Until now the agent checked only
+that an account name was spelled `[a-z][a-z0-9_]{2,29}` and that the user existed. Measured on real
+Ubuntu 24.04 and AlmaLinux 9 containers, suspending, deleting, setting a quota on or rewriting the
+crontab of `root`, `mysql` or `games` all went through to `usermod`, `userdel`, `setquota` and
+`crontab -u`: root's shell was changed to nologin, `mysql` was removed from `passwd`, `shadow` and
+`group`, and `CreateAccount` for `redis` ran `useradd`. Anyone able to reach the panel's API as an
+administrator, or a compromised API, could do the same to the host's own users. The fix is in two
+places, and the agent is the one that enforces it.
+
+- **A managed-account check in the agent.** Every account lifecycle operation (suspend, unsuspend,
+  delete, quota, usage, suspension state), every cron operation, and the SFTP and FTPS login
+  creation and password changes now require proof that the user is a hosting account: the name is
+  not on a reserved list of 103 names (system, daemon, database, web, mail and cloud-image login
+  names, plus anything starting `maran_`), there is exactly one passwd row of that name, its home is
+  exactly `/home/<name>`, and its uid and gid are at or above the host's `UID_MIN` and `GID_MIN`.
+  A refused request runs nothing, not even `id -u`, and answers `INVALID_INPUT` with a fixed sentence
+  that does not say which rule refused; an absent user is still `NOT_FOUND`. `CreateAccount` refuses a
+  reserved name before asking the host anything, and still refuses a user that already exists.
+- **Deletion resolves the account inside its lock and again before `userdel`.** If the uid or gid
+  changed while the cascade ran, the deletion stops with a system failure instead of removing a
+  different user.
+- **The panel refuses the same names, in three languages.** Creating an account through the API with
+  a reserved name now fails validation with `AccountNameReserved`, and the username alphabet is
+  narrowed to exactly the agent's rule: no hyphen, 3 to 30 characters. Both messages exist in
+  English, Russian and Armenian. The account form in the SPA still offers the old hyphen pattern;
+  that is a follow-up.
+
+What an operator will notice: a name such as `admin`, `mysql`, `git` or `ubuntu` can no longer be
+given to a hosting account, and `acme-01` style names are no longer accepted. Existing accounts are
+not touched. `RepairAccountHomeGroups` now skips users the panel does not manage.
+
+Known residual: there is no marker on managed accounts. An ordinary hand-made user at or above the
+id floor, with home `/home/<name>` and a name not on the list, is still manageable. The decision and
+its reasoning are in `docs/superpowers/notes/2026-10-26-account-reserved-names-threat-note.md`.
+This change touches root-run account operations and needs a second human review before it reaches
+`main` (#83).
+
 ## 1.0.0-beta.3 — 2026-10-03
 
 **Maran could not be installed on half the systems it claimed to support, and now it can.** The
