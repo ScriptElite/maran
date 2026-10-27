@@ -1,6 +1,10 @@
 # Committed per-target test baseline. Recorded by 'maran test --accept'; commit the diff.
 # stack<TAB>target<TAB>passed<TAB>failed<TAB>ignored
 #
+# RE-MEASURED 2026-10-27 (issues #87, #88, agent outage and contract revision, rebased on dev): rust 30 targets
+# 2175 passed / 0 failed / 133 ignored (maran_agent 347). Backend projects measured one by one with -m:1 because the
+# whole-solution run is OOM-killed on this workstation: Agent.Client 371, Backups 198, Cron 182, Sdk 208,
+# ArchitectureTests 80, Host.Tests 281 (Sftp 80 and Sites 176 unchanged). Host.IntegrationTests not measured here; CI measures it.
 # RE-MEASURED 2026-10-27 (issue #83, reserved account names, rebased on dev with #84 and #93): rust 30 targets,
 # 2171 passed / 0 failed / 133 ignored. maran_agent 343, maran_agent_core 404, maran_ops 1322, handshake 7, NEW row
 # account_identity_on_a_real_host 0/0/6. Backend rows not re-measured here (the full backend run is OOM-killed on
@@ -246,7 +250,7 @@
 # The header above was regenerated away by 'maran test spa --accept' and is restored here by
 # hand: the accept path rewrites this file from the run alone and keeps no prose, so every
 # re-measurement note in it is one --accept away from being lost. Worth fixing in the script.
-rust	maran_agent [unittests src/lib.rs]	343	0	0
+rust	maran_agent [unittests src/lib.rs]	347	0	0
 rust	maran_agent [unittests src/main.rs]	0	0	0
 rust	account_deletion_on_a_real_host [tests/account_deletion_on_a_real_host.rs]	0	0	5
 rust	account_identity_on_a_real_host [tests/account_identity_on_a_real_host.rs]	0	0	6
@@ -276,7 +280,7 @@ rust	doc-tests maran_agent_core	0	0	0
 rust	doc-tests maran_distro	0	0	0
 rust	doc-tests maran_ops	0	0	0
 rust	doc-tests maran_templates	0	0	0
-backend	Maran.Agent.Client.Tests.dll	328	0	0
+backend	Maran.Agent.Client.Tests.dll	371	0	0
 backend	Maran.SharedKernel.Tests.dll	168	0	0
 backend	Maran.Modules.Identity.Tests.dll	275	0	0
 backend	Maran.Modules.Sftp.Tests.dll	80	0	0
@@ -284,17 +288,17 @@ backend	Maran.Modules.Notifications.Tests.dll	48	0	0
 backend	Maran.Modules.Tasks.Tests.dll	54	0	0
 backend	Maran.Modules.Ftp.Tests.dll	109	0	0
 backend	Maran.Modules.Monitoring.Tests.dll	66	0	0
-backend	Maran.Modules.Backups.Tests.dll	191	0	0
+backend	Maran.Modules.Backups.Tests.dll	198	0	0
 backend	Maran.Modules.Licensing.Tests.dll	47	0	0
 backend	Maran.Modules.Firewall.Tests.dll	249	0	0
-backend	Maran.Modules.Cron.Tests.dll	181	0	0
+backend	Maran.Modules.Cron.Tests.dll	182	0	0
 backend	Maran.Modules.Accounts.Tests.dll	279	0	0
 backend	Maran.Modules.Databases.Tests.dll	101	0	0
 backend	Maran.Modules.Ssl.Tests.dll	159	0	0
-backend	Maran.Sdk.Tests.dll	204	0	0
+backend	Maran.Sdk.Tests.dll	208	0	0
 backend	Maran.Modules.Sites.Tests.dll	176	0	0
-backend	Maran.ArchitectureTests.dll	62	0	0
-backend	Maran.Host.Tests.dll	243	0	0
+backend	Maran.ArchitectureTests.dll	80	0	0
+backend	Maran.Host.Tests.dll	281	0	0
 backend	Maran.Host.IntegrationTests.dll	415	0	0
 spa	accounts/delete.spec.ts	6	0	0
 spa	accounts/detail.spec.ts	10	0	0
