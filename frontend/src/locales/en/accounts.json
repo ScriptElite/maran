@@ -43,7 +43,7 @@
       "submit": "Create account",
       "errors": {
         "nameRequired": "Name is required.",
-        "nameInvalid": "Name must be a lowercase, Linux-username-safe identifier (letters, digits, hyphen, underscore, starting with a letter, 3-32 characters).",
+        "nameInvalid": "Name must be a lowercase, Linux-username-safe identifier (letters, digits, underscore, starting with a letter, 3-30 characters).",
         "primaryDomainRequired": "Primary domain is required.",
         "primaryDomainInvalid": "Primary domain must be a valid domain name.",
         "planRequired": "Choose a plan.",

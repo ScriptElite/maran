@@ -29,9 +29,9 @@ import { useAccountsStore } from '../../stores/accounts'
 
 /**
  * Matches the server's `Name` rule exactly: lowercase, starts with a letter,
- * 3-32 characters of lowercase letters/digits/hyphen/underscore.
+ * 3-30 characters of lowercase letters/digits/underscore.
  */
-const NAME_PATTERN = /^[a-z][a-z0-9_-]{2,31}$/
+const NAME_PATTERN = /^[a-z][a-z0-9_]{2,29}$/
 
 /**
  * Matches the server's `PrimaryDomain` rule exactly: dot-separated labels of
