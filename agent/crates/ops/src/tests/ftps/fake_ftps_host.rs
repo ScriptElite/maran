@@ -13,6 +13,7 @@ use maran_agent_core::agent_paths::AgentPaths;
 use maran_agent_core::command_outcome::CommandOutcome;
 use maran_agent_core::validation::secrets::password::Password;
 use maran_agent_core::validation::system::ftps_user_name::FtpsUserName;
+use maran_agent_core::validation::system::managed_account::ManagedAccount;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_agent_core::validation::web::domain::Domain;
 use maran_agent_core::validation::web::passive_address::PassiveAddress;
@@ -132,6 +133,16 @@ pub(crate) struct FakeFtpsHost {
     ownerships: Mutex<Vec<Option<AccountOwnership>>>,
     /// How many times `account_ownership` has been asked.
     ownership_questions: Mutex<usize>,
+    /// The ids of the hosting account's row in the fake's password database, as
+    /// `managed_account` reads them, or `None` when the fake holds no account.
+    ///
+    /// Kept apart from [`Self::ownerships`] on purpose: that queue is consumed
+    /// question by question, and the managed-account check must see the row
+    /// whatever the queue has been through.
+    account_row_ids: Option<(u32, u32)>,
+    /// The home of the hosting account's row, when a test replaced the managed
+    /// `/home/<name>` with something else.
+    account_home: Option<String>,
     /// Every login in the fake's password database.
     logins: Mutex<Vec<CreatedLogin>>,
     /// Every directory that exists, with the mode it was created at.
@@ -209,6 +220,8 @@ impl FakeFtpsHost {
             account: None,
             ownerships: Mutex::new(Vec::new()),
             ownership_questions: Mutex::new(0),
+            account_row_ids: None,
+            account_home: None,
             logins: Mutex::new(Vec::new()),
             directories: Mutex::new(Vec::new()),
             unit_files: Mutex::new(Vec::new()),
@@ -235,7 +248,32 @@ impl FakeFtpsHost {
         let mut host = Self::new();
         host.account = Some(account.to_owned());
         *host.ownerships.lock().unwrap() = vec![Some(AccountOwnership { uid, gid })];
+        host.account_row_ids = Some((uid, gid));
         host
+    }
+
+    /// Gives the hosting account's password row these ids, whatever
+    /// `account_ownership` answers.
+    ///
+    /// For the refusal classes of the managed-account check: a uid or gid below
+    /// the host's floor is a system identity, and 0 is root's.
+    pub(crate) fn with_account_row_ids(mut self, uid: u32, gid: u32) -> Self {
+        self.account_row_ids = Some((uid, gid));
+        self
+    }
+
+    /// Takes the hosting account's row out of the password database while the
+    /// jail and the logins stay, so only the managed-account check can notice.
+    pub(crate) fn without_account_row(mut self) -> Self {
+        self.account_row_ids = None;
+        self
+    }
+
+    /// Gives the hosting account's password row this home instead of the
+    /// managed `/home/<name>`.
+    pub(crate) fn with_account_home(mut self, home: &str) -> Self {
+        self.account_home = Some(home.to_owned());
+        self
     }
 
     /// The account's identity answers `answers` in order, so the operation's
@@ -1002,6 +1040,30 @@ impl FtpsHost for FakeFtpsHost {
         };
 
         answer.ok_or(FtpsError::AccountMissing)
+    }
+
+    /// Decides through the shipped [`ManagedAccount`] rule over a one-row
+    /// password text the fake composes from the ids and home it holds, so the
+    /// fake never has an opinion of its own about who counts as managed.
+    fn managed_account(
+        &self,
+        _passwd_database: &str,
+        account: &AccountName,
+    ) -> Result<ManagedAccount, FtpsError> {
+        if !self.passwd_readable {
+            return Err(FtpsError::AccountMissing);
+        }
+        let Some((uid, gid)) = self.account_row_ids else {
+            return Err(FtpsError::AccountMissing);
+        };
+
+        let home = self
+            .account_home
+            .clone()
+            .unwrap_or_else(|| format!("/home/{}", account.as_str()));
+        let passwd = format!("{}:x:{uid}:{gid}::{home}:/bin/sh\n", account.as_str());
+
+        ManagedAccount::resolve(account.clone(), &passwd).map_err(FtpsError::from_managed_account)
     }
 
     fn create_directory(&self, path: &Path, mode: u32) -> Result<(), FtpsError> {

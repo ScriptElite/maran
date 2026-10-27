@@ -25,7 +25,14 @@ pub trait SystemHost: Send + Sync {
     /// the outcome, because each caller reads the status differently.
     fn run(&self, program: &str, arguments: &[&str]) -> Result<CommandOutcome, AccountError>;
 
-    /// Reports whether a system user exists.
+    /// Reports whether a system user exists, by every name source the host is
+    /// configured with.
+    ///
+    /// Asked by account creation only, to refuse a name that already belongs to
+    /// ANY user (never adopting it). It is NOT how an operation on an existing
+    /// account decides it may act: that is the managed-account resolution over
+    /// [`SystemHost::read_password_database`], which refuses a user this panel
+    /// did not create even though it exists.
     ///
     /// # Errors
     ///
@@ -41,7 +48,9 @@ pub trait SystemHost: Send + Sync {
 
     /// Reads the host's local password database, whole.
     ///
-    /// The one source `RepairHomeGroups` enumerates hosting accounts from —
+    /// The one source every operation on an existing account resolves its
+    /// managed account from, and `RepairHomeGroups` enumerates hosting accounts
+    /// from —
     /// the same file and the same parse
     /// (`maran_agent_core::utils::system_accounts::system_accounts`) the
     /// monitoring area's disk-usage figures already use, so "which accounts

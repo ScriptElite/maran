@@ -54,29 +54,6 @@ pub enum LoginsError {
     #[error("the password status could not be read")]
     StatusUnreadable,
 
-    /// The cull of a suspended account's open sessions refused to run, because
-    /// the account's own password-database row carries uid 0.
-    ///
-    /// Its own variant rather than a folded-in failure, because the two answers
-    /// an operator needs are different: this one says the panel's record names
-    /// something that is not a hosting account, and no retry will change it. The
-    /// account-name grammar accepts `root`, so this is a guard against a name
-    /// collision and not a defensive nicety — see
-    /// `end_account_sessions`.
-    #[error("the hosting account resolves to uid 0, so no session cull was attempted")]
-    SessionCullRefusedUid,
-
-    /// The cull refused because the account's row is not homed where this agent
-    /// homes a hosting account.
-    ///
-    /// Separate from [`Self::SessionCullRefusedUid`] because it catches a
-    /// different collision — a system user at a low uid, `mail` at uid 8 — and
-    /// because a reviewer must be able to see that the two guards are two.
-    #[error(
-        "the hosting account is not homed where this agent homes one, so no session cull was attempted"
-    )]
-    SessionCullRefusedHome,
-
     /// `pkill` answered with neither "signalled" nor "nothing matched" while
     /// ending a suspended account's sessions.
     ///
@@ -101,6 +78,19 @@ pub enum LoginsError {
     /// was locked or unlocked, and the panel's answer is to retry.
     #[error("another operation is already running for the hosting account")]
     AccountBusy,
+
+    /// The name is not a hosting account this panel may act on.
+    ///
+    /// Raised before any login is locked or any process is signalled, for
+    /// every way the managed-account proof can refuse: a reserved name, an id
+    /// below the distro's floor (uid 0 included) and a home other than the one
+    /// this agent gives a hosting account. They are ONE variant with one fixed
+    /// sentence on purpose: separate variants would let a caller tell a reserved
+    /// name from a system identity from a wrong home by the message, which is
+    /// the rule-shape oracle the threat note forbids. A refusal added to the
+    /// type later lands here too, so it fails closed.
+    #[error("the account is not a hosting account")]
+    AccountNotManaged,
 }
 
 impl LoginsError {

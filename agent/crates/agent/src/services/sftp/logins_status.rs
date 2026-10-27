@@ -23,6 +23,10 @@ pub fn to_agent_error(error: &LoginsError) -> AgentError {
         // The account is not on this host, or its password database cannot be
         // read. Something the panel asked about is not there to answer for.
         LoginsError::AccountMissing => ErrorCode::NotFound,
+        // The managed-account proof refused the name (reserved, a system
+        // identity, or not homed where a hosting account is) under ONE variant,
+        // so the fixed sentence cannot tell a prober which rule fired.
+        LoginsError::AccountNotManaged => ErrorCode::InvalidInput,
         // Faults of this machine. A status that could not be read is one of
         // them and is deliberately not a success: "not locked" and "unreadable"
         // are the same value to a caller that guesses, and the guess would

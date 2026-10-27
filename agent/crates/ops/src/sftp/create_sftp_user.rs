@@ -122,6 +122,9 @@ const START_NOW: &str = "--now";
 ///
 /// # Errors
 ///
+/// - [`SftpError::AccountNotManaged`] when the hosting account is reserved, a system
+///   identity or has the wrong home. Checked first, with the same effect as the
+///   next entry: nothing is created.
 /// - [`SftpError::AccountMissing`] when the hosting account is not on this
 ///   host. Checked first, before anything is created: a jail for an account
 ///   that does not exist is a root-owned directory nothing will ever mount into.
@@ -173,6 +176,13 @@ pub(crate) fn create_sftp_user_under_lock(
     distro: &dyn DistroAdapter,
     request: &SftpUserRequest,
 ) -> Result<(), SftpError> {
+    // The gate, before any host fact is read or anything is built: the login
+    // is created with the account's own uid and gid, so an account that is a
+    // system user, an operator's own login or a reserved name must be refused
+    // here and not discovered by what `useradd` does with it. The proof is not
+    // kept; the identity re-read below is what guards the window after it.
+    host.managed_account(distro.passwd_database(), &request.account)?;
+
     let ownership = host.account_ownership(&request.account)?;
 
     let jail = AccountJail::for_account(&request.account, distro.systemd_unit_directory());

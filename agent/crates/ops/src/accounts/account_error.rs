@@ -1,6 +1,7 @@
 //! Failures of the account operations.
 
 use maran_agent_core::command_outcome::CommandOutcome;
+use maran_agent_core::validation::system::managed_account_error::ManagedAccountError;
 use maran_agent_core::validation::system::name_error::NameError;
 
 /// The most characters of a refusing tool's standard error the agent writes to
@@ -33,10 +34,47 @@ pub enum AccountError {
         username: String,
     },
 
-    /// The account does not exist on this host.
+    /// The account has no row in this host's local password database.
+    ///
+    /// Also what a name served only by a name service, and a name whose row is
+    /// ambiguous (the same name twice), is reported as: neither is a user this
+    /// panel created, so neither is one it will act on.
     #[error("account '{username}' was not found")]
     NotFound {
         /// The name that was looked up.
+        username: String,
+    },
+
+    /// The name is spelled correctly but is not a hosting account this agent will
+    /// act on as root: it is reserved, or its user has a system identity, or its
+    /// home is not the managed home.
+    ///
+    /// Raised before any tool runs and before any database, login, crontab or
+    /// pool is touched, so the refusal changed nothing. A refusal and not an
+    /// absence: the user may well exist, which is the point.
+    ///
+    /// **The `Display` names no rule**, and neither does the wire message built
+    /// from it, because saying which check failed describes the shape of the
+    /// rules to whoever is probing them. `refusal` is for the agent's own log
+    /// and for tests, and is deliberately left out of the sentence.
+    #[error("account '{username}' is not a hosting account this panel manages")]
+    NotManaged {
+        /// The name that was refused.
+        username: String,
+        /// Which check refused it. Never shown to a caller.
+        refusal: ManagedAccountError,
+    },
+
+    /// The user behind the name was replaced while a deletion waited on other
+    /// work, so the deletion stopped before `userdel`.
+    ///
+    /// The account was resolved at the start and again immediately before the
+    /// irreversible step, and the user id or group id differed: the original
+    /// user was removed by hand and a different one given the name, and
+    /// removing this one would delete somebody else's account and files.
+    #[error("account '{username}' changed identity while the operation ran")]
+    IdentityChanged {
+        /// The name both resolutions looked up.
         username: String,
     },
 

@@ -33,8 +33,14 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 /// because they are the thing an operation holds for as long as a backup takes.
 ///
 /// Entries are never removed. The map is therefore bounded by the number of
-/// accounts this host has ever run one of these operations for, at one `Arc`
-/// and one name each — a few kilobytes on a full server. Removing an entry when
+/// names this host has ever run one of these operations for, at one `Arc`
+/// and one name each — a few kilobytes on a full server. It is NAMES and not
+/// accounts: the deletion takes the lock before it resolves anything (see
+/// below), so a name that turns out not to be a hosting account still leaves an
+/// entry, and a peer that sends many distinct well-formed names grows the map by
+/// roughly a hundred bytes each. That residual is accepted and stated: the
+/// alternative, resolving before locking, would make the resolution and what it
+/// authorises two critical sections. Removing an entry when
 /// its last guard drops would need the removal and the next lookup to be one
 /// atomic step, and
 /// getting that wrong hands two operations two different locks for one account,
@@ -99,6 +105,16 @@ static ACCOUNT_LOCKS: Mutex<Option<HashMap<String, Arc<AsyncMutex<()>>>>> = Mute
 /// calls it while holding this lock — and it does not need to be: a removal
 /// cannot leave behind a pool naming a user who has gone, which is the state
 /// being excluded.
+///
+/// # The proof is resolved INSIDE the lock
+///
+/// The lock is keyed by the NAME, and an operation that holds it resolves its
+/// `ManagedAccount` after acquiring it, never before: the resolution and the
+/// root effect it authorises are then one critical section. An operation that
+/// waits on anything afterwards resolves again and compares the user and group
+/// ids with the first resolution (`AccountOperations::delete`, immediately
+/// before `userdel`). The lock stays outer and never waits; this changes
+/// nothing about who takes it.
 ///
 /// # Without waiting, and that is what makes deadlock impossible
 ///
@@ -212,7 +228,7 @@ static ACCOUNT_LOCKS: Mutex<Option<HashMap<String, Arc<AsyncMutex<()>>>>> = Mute
 /// sound for the product's threat model — one root daemon per host, systemd
 /// managed, socket bound exclusively — and it is written down rather than left
 /// to be assumed, because every re-read this seam performs (the account's
-/// existence before `userdel`, the account's ids before a `useradd`, the
+/// identity before `userdel`, the account's ids before a `useradd`, the
 /// account's ids before a restore's home swap) exists precisely to catch what a
 /// process-local lock cannot see.
 ///

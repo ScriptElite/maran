@@ -18,6 +18,8 @@ fn every_variant() -> Vec<LoginsError> {
         LoginsError::SpawnFailed { code: 12 },
         LoginsError::StatusUnreadable,
         LoginsError::AccountBusy,
+        LoginsError::AccountNotManaged,
+        LoginsError::SessionCullFailed { code: 1 },
     ]
 }
 
@@ -119,4 +121,37 @@ fn no_mapped_failure_carries_a_tools_output() {
             "the mapping must not invent a message beside the variant's own"
         );
     }
+}
+
+#[test]
+fn a_user_that_is_not_a_hosting_account_is_an_invalid_input_and_never_a_fault() {
+    // The managed-account proof refused the name, so nothing was locked, unlocked
+    // or killed. A request fault with a fixed sentence: not NOT_FOUND (the user
+    // may exist), not SYSTEM_FAILURE (nothing on this host is broken), and not
+    // ACCOUNT_BUSY, which tells a caller to reissue the identical request.
+    let refusal = code_of(&LoginsError::AccountNotManaged);
+
+    assert_eq!(refusal, ErrorCode::InvalidInput as i32);
+    for wrong in [
+        ErrorCode::SystemFailure,
+        ErrorCode::NotFound,
+        ErrorCode::AccountBusy,
+    ] {
+        assert_ne!(refusal, wrong as i32);
+    }
+}
+
+#[test]
+fn the_not_managed_sentence_is_fixed_and_names_no_rule() {
+    let message = to_agent_error(&LoginsError::AccountNotManaged).message;
+
+    assert_eq!(message, "the account is not a hosting account");
+}
+
+#[test]
+fn a_session_cull_that_failed_is_a_system_failure_carrying_the_status() {
+    let wire = to_agent_error(&LoginsError::SessionCullFailed { code: 3 });
+
+    assert_eq!(wire.code, ErrorCode::SystemFailure as i32);
+    assert!(wire.message.contains('3'), "{}", wire.message);
 }

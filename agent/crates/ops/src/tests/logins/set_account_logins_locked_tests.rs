@@ -478,3 +478,117 @@ fn a_suspension_that_finished_leaves_the_accounts_lock_free() {
         "the lock must be free once the operation returned"
     );
 }
+
+/// Asserts that suspending `account` over `host` is refused with a variant
+/// `expected` accepts, and that nothing at all was run.
+fn assert_refused_before_any_command(
+    host: &FakeLoginsHost,
+    account: &AccountName,
+    expected: fn(&LoginsError) -> bool,
+) {
+    let refused = set_account_logins_locked_under_lock(host, distro(), account, true);
+
+    match refused {
+        Err(error) => assert!(expected(&error), "the wrong refusal: {error:?}"),
+        Ok(_) => panic!("the suspension was not refused"),
+    }
+    assert!(
+        host.spawns().is_empty(),
+        "usermod and pkill must not run once the account is refused: {:?}",
+        host.spawns()
+    );
+}
+
+#[test]
+fn a_reserved_name_is_refused_before_usermod_or_pkill_runs() {
+    // The name grammar accepts `root`, and `usermod --lock` plus `pkill --uid`
+    // against the real root would take the host down. The row is otherwise
+    // perfect (a managed home, an id above the floor), so only the reserved
+    // list can be what refuses it.
+    let root = AccountName::parse("root").expect("the grammar accepts it");
+    let host = FakeLoginsHost::with_passwd(&[("root", ACCOUNT_UID, "/home/root")])
+        .with_process(ACCOUNT_UID);
+
+    assert_refused_before_any_command(&host, &root, |error| {
+        matches!(error, LoginsError::AccountNotManaged)
+    });
+    assert_eq!(host.running_processes(), vec![ACCOUNT_UID]);
+}
+
+#[test]
+fn a_system_identity_is_refused_before_usermod_or_pkill_runs() {
+    // The managed home, so the home check cannot be what refuses this row.
+    let host = FakeLoginsHost::with_passwd(&[("alice", 0, "/home/alice")]).with_process(0);
+
+    assert_refused_before_any_command(&host, &account(), |error| {
+        matches!(error, LoginsError::AccountNotManaged)
+    });
+    assert_eq!(host.running_processes(), vec![0]);
+}
+
+#[test]
+fn an_id_below_the_floor_is_refused_even_when_it_is_not_zero() {
+    // `mail` is uid 8 on every supported image: non-zero, so a guard that only
+    // compared against zero would let it through.
+    let host = FakeLoginsHost::with_passwd(&[("alice", 8, "/home/alice")]).with_process(8);
+
+    assert_refused_before_any_command(&host, &account(), |error| {
+        matches!(error, LoginsError::AccountNotManaged)
+    });
+}
+
+#[test]
+fn a_home_other_than_the_managed_one_is_refused_before_anything_runs() {
+    let host = FakeLoginsHost::with_passwd(&[("alice", ACCOUNT_UID, "/var/spool/mail")])
+        .with_process(ACCOUNT_UID);
+
+    assert_refused_before_any_command(&host, &account(), |error| {
+        matches!(error, LoginsError::AccountNotManaged)
+    });
+}
+
+#[test]
+fn the_unlock_direction_is_gated_by_the_same_proof_and_runs_nothing() {
+    // The gate is not a property of the locking direction: unlocking the
+    // logins of an operator's own user is as much a change to a login this
+    // agent did not create. Every refusal reads as the one variant.
+    let rows: [(&str, &str, u32, &str); 4] = [
+        ("root", "root", ACCOUNT_UID, "/home/root"),
+        ("alice", "alice", 0, "/home/alice"),
+        ("alice", "alice", 8, "/home/alice"),
+        ("alice", "alice", ACCOUNT_UID, "/var/spool/mail"),
+    ];
+    for (requested, row_name, uid, home) in rows {
+        let name = AccountName::parse(requested).expect("the grammar accepts it");
+        let host = FakeLoginsHost::with_passwd(&[(row_name, uid, home)]);
+
+        let refused = set_account_logins_locked_under_lock(&host, distro(), &name, false);
+
+        assert!(
+            matches!(refused, Err(LoginsError::AccountNotManaged)),
+            "{requested} {uid} {home}: got {refused:?}"
+        );
+        assert!(host.spawns().is_empty(), "{:?}", host.spawns());
+    }
+}
+
+#[test]
+fn an_absent_account_is_refused_before_anything_runs() {
+    let host = FakeLoginsHost::with_passwd(&[("bob", OTHER_UID, "/home/bob")]);
+
+    assert_refused_before_any_command(&host, &account(), |error| {
+        matches!(error, LoginsError::AccountMissing)
+    });
+}
+
+#[test]
+fn a_hosting_account_passes_the_same_gate_that_refuses_the_rows_above() {
+    // The accepting control: the refusals above would all hold for a gate that
+    // refused everything.
+    let host = FakeLoginsHost::with_passwd(&[account_row()]).with_process(ACCOUNT_UID);
+
+    set_account_logins_locked_under_lock(&host, distro(), &account(), true).expect("suspended");
+
+    assert!(!host.spawns().is_empty());
+    assert!(host.running_processes().is_empty());
+}

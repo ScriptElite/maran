@@ -56,6 +56,22 @@ use crate::ftps::model::ftps_jail::FtpsJail;
 /// operator's typo and an attacker's probe get one answer; the audit trail is
 /// where the two are told apart.
 ///
+/// # Why this path does not take the managed-account proof
+///
+/// The operations that set a password or create a login resolve the hosting
+/// account through the managed-account type first; this one does not, and that
+/// is a decision rather than a gap. The `userdel` below runs on a name only
+/// after it has been found in the account's own login enumeration, which admits
+/// a passwd row only when its home is exactly this account's jail directory — a
+/// path the agent wrote when it created the login and one no reserved, system
+/// or operator user has. So a name that is reserved, a system identity or an
+/// ordinary host user cannot reach `userdel` through here, whatever account name
+/// the caller supplies: the jail home is the proof, and it is stronger than the
+/// name rules because it is a fact about the row and not about a spelling.
+/// Threading the account proof into the removal body would refuse the deletion
+/// of a login whose account has since become unmanaged, which is a login an
+/// operator needs to be able to remove.
+///
 /// # The lock
 ///
 /// The hosting account's lock (`crate::accounts::account_lock`) is taken as the

@@ -344,3 +344,56 @@ fn the_login_name_that_reaches_useradd_is_the_one_the_account_prefix_built() {
 
     assert_eq!(host.login_names(), vec![expected]);
 }
+
+/// Asserts that a refused creation built and ran nothing at all.
+fn assert_nothing_was_built(host: &FakeFtpsHost) {
+    assert!(
+        host.last_spawn().is_none(),
+        "no useradd and no chpasswd may run for an unmanaged account"
+    );
+    assert!(
+        host.created_user().is_none() && host.created_directories().is_empty(),
+        "no login and no jail may exist for an unmanaged account"
+    );
+}
+
+#[test]
+fn creating_an_ftps_login_for_a_reserved_account_name_runs_no_useradd() {
+    let host = FakeFtpsHost::for_account("nginx", 1001, 1001);
+
+    let result = create_ftps_user_under_lock(&host, distro(), &request("nginx", "files", PASSWORD));
+
+    assert!(
+        matches!(result, Err(FtpsError::AccountNotManaged)),
+        "{result:?}"
+    );
+    assert_nothing_was_built(&host);
+}
+
+#[test]
+fn creating_an_ftps_login_for_an_account_with_a_system_identity_runs_no_useradd() {
+    let host = FakeFtpsHost::for_account("handmade", 1001, 1001).with_account_row_ids(100, 100);
+
+    let result =
+        create_ftps_user_under_lock(&host, distro(), &request("handmade", "files", PASSWORD));
+
+    assert!(
+        matches!(result, Err(FtpsError::AccountNotManaged)),
+        "{result:?}"
+    );
+    assert_nothing_was_built(&host);
+}
+
+#[test]
+fn creating_an_ftps_login_for_an_account_with_another_home_runs_no_useradd() {
+    let host = FakeFtpsHost::for_account("handmade", 1001, 1001).with_account_home("/srv/handmade");
+
+    let result =
+        create_ftps_user_under_lock(&host, distro(), &request("handmade", "files", PASSWORD));
+
+    assert!(
+        matches!(result, Err(FtpsError::AccountNotManaged)),
+        "{result:?}"
+    );
+    assert_nothing_was_built(&host);
+}

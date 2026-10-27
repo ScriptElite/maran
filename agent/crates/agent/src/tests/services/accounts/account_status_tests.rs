@@ -15,6 +15,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use maran_agent_core::validation::system::managed_account_error::ManagedAccountError;
 use maran_ops::accounts::AccountError;
 
 use super::to_agent_error;
@@ -62,7 +63,17 @@ fn every_variant() -> Vec<AccountError> {
         AccountError::SftpRemoval {
             reason: "a login is still there".to_owned(),
         },
+        AccountError::FtpsRemoval {
+            reason: "an FTPS login is still there".to_owned(),
+        },
         AccountError::Busy {
+            username: "acme".to_owned(),
+        },
+        AccountError::NotManaged {
+            username: "root".to_owned(),
+            refusal: ManagedAccountError::Reserved,
+        },
+        AccountError::IdentityChanged {
             username: "acme".to_owned(),
         },
     ]
@@ -218,4 +229,103 @@ fn a_busy_account_and_a_genuine_fault_of_this_host_are_different_codes() {
             })
         );
     }
+}
+
+#[test]
+fn a_user_that_is_not_a_hosting_account_is_an_invalid_input_and_never_a_fault() {
+    // Reserved, a system identity and a home elsewhere are all the same answer to
+    // the panel: the request names something this panel does not manage. Not
+    // SYSTEM_FAILURE (nothing on the host is broken), not NOT_FOUND (the user
+    // may well exist), and not ALREADY_EXISTS or ACCOUNT_BUSY, which the panel
+    // acts on differently.
+    for refusal in [
+        ManagedAccountError::Reserved,
+        ManagedAccountError::SystemIdentity,
+        ManagedAccountError::WrongHome,
+    ] {
+        let error = AccountError::NotManaged {
+            username: "root".to_owned(),
+            refusal,
+        };
+        assert_eq!(
+            code_of(&error),
+            ErrorCode::InvalidInput as i32,
+            "{error} must be an invalid input"
+        );
+    }
+    for wrong in [
+        ErrorCode::SystemFailure,
+        ErrorCode::NotFound,
+        ErrorCode::AlreadyExists,
+        ErrorCode::AccountBusy,
+    ] {
+        assert_ne!(
+            code_of(&AccountError::NotManaged {
+                username: "root".to_owned(),
+                refusal: ManagedAccountError::SystemIdentity,
+            }),
+            wrong as i32
+        );
+    }
+}
+
+#[test]
+fn the_wire_refusal_does_not_say_which_rule_refused_the_user() {
+    // The three refusals differ in the variant and must not differ on the wire:
+    // telling a caller "reserved" versus "system identity" versus "wrong home"
+    // is a probe for which names on this host are special. The sentence names
+    // the user the caller itself supplied and nothing more.
+    let messages: Vec<String> = [
+        ManagedAccountError::Reserved,
+        ManagedAccountError::SystemIdentity,
+        ManagedAccountError::WrongHome,
+    ]
+    .into_iter()
+    .map(|refusal| {
+        to_agent_error(&AccountError::NotManaged {
+            username: "root".to_owned(),
+            refusal,
+        })
+        .message
+    })
+    .collect();
+
+    assert_eq!(messages[0], messages[1]);
+    assert_eq!(messages[1], messages[2]);
+    for word in ["reserved", "identity", "home", "uid"] {
+        assert!(
+            !messages[0].to_lowercase().contains(word),
+            "the message must not name a rule: {}",
+            messages[0]
+        );
+    }
+}
+
+#[test]
+fn a_deletion_that_found_the_user_replaced_is_a_system_failure_that_ran_nothing() {
+    // The identity changed while the deletion waited for the lock, so `userdel`
+    // did not run. It must read as a fault to look at, not as a refusal of the
+    // request, because the request was fine and the host moved under it.
+    let error = AccountError::IdentityChanged {
+        username: "acme".to_owned(),
+    };
+
+    assert_eq!(code_of(&error), ErrorCode::SystemFailure as i32);
+    assert_ne!(
+        code_of(&error),
+        code_of(&AccountError::NotManaged {
+            username: "acme".to_owned(),
+            refusal: ManagedAccountError::Reserved,
+        })
+    );
+}
+
+#[test]
+fn an_ftps_removal_refusal_is_a_system_failure_and_the_account_is_still_there() {
+    assert_eq!(
+        code_of(&AccountError::FtpsRemoval {
+            reason: "an FTPS login is still there".to_owned(),
+        }),
+        ErrorCode::SystemFailure as i32
+    );
 }

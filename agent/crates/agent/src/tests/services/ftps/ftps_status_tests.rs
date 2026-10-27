@@ -134,3 +134,43 @@ fn a_busy_account_is_not_the_answer_for_a_suspended_login_left_open() {
         assert_ne!(code_of(&error), code_of(&FtpsError::AccountBusy));
     }
 }
+
+#[test]
+fn a_user_that_is_not_a_hosting_account_is_an_invalid_input_and_never_a_fault() {
+    // The managed-account proof refused the name before anything was created or
+    // changed. A request fault: the user may well exist (so not NOT_FOUND) and
+    // nothing on the host is broken (so not SYSTEM_FAILURE).
+    let refusal = code_of(&FtpsError::AccountNotManaged);
+
+    assert_eq!(refusal, ErrorCode::InvalidInput as i32);
+    for wrong in [
+        ErrorCode::SystemFailure,
+        ErrorCode::NotFound,
+        ErrorCode::AccountBusy,
+        ErrorCode::AlreadyExists,
+    ] {
+        assert_ne!(refusal, wrong as i32);
+    }
+}
+
+#[test]
+fn an_account_that_is_not_there_and_one_that_is_not_managed_are_different_answers() {
+    // The inverse control: a missing account stays NOT_FOUND, so the new arm
+    // cannot have swallowed it.
+    assert_eq!(
+        code_of(&FtpsError::AccountMissing),
+        ErrorCode::NotFound as i32
+    );
+    assert_ne!(
+        code_of(&FtpsError::AccountMissing),
+        code_of(&FtpsError::AccountNotManaged)
+    );
+}
+
+#[test]
+fn the_not_managed_sentence_is_fixed_and_names_no_rule() {
+    let wire = to_agent_error(&FtpsError::AccountNotManaged);
+
+    assert_eq!(wire.message, "the account is not a hosting account");
+    assert_eq!(wire.tool_output, "");
+}

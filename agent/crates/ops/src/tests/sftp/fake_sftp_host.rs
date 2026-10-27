@@ -23,6 +23,7 @@ use std::sync::Mutex;
 
 use maran_agent_core::command_outcome::CommandOutcome;
 use maran_agent_core::validation::secrets::password::Password;
+use maran_agent_core::validation::system::managed_account::ManagedAccount;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_agent_core::validation::system::sftp_user_name::SftpUserName;
 use maran_distro::{DistroAdapter, DistroFamily, adapter_for};
@@ -168,6 +169,12 @@ pub(crate) struct FakeSftpHost {
     ownerships: Mutex<Vec<Option<AccountOwnership>>>,
     /// How many times `account_ownership` has been asked.
     ownership_questions: Mutex<usize>,
+    /// The user and group id of the hosting account's row in the fake's
+    /// password database, as `managed_account` reads them.
+    account_ids: Mutex<(u32, u32)>,
+    /// The home of the hosting account's row, when a test replaced the managed
+    /// `/home/<name>` with something else.
+    account_home: Mutex<Option<String>>,
 }
 
 impl FakeSftpHost {
@@ -195,7 +202,27 @@ impl FakeSftpHost {
                 gid: ACCOUNT_GID,
             })]),
             ownership_questions: Mutex::new(0),
+            account_ids: Mutex::new((ACCOUNT_UID, ACCOUNT_GID)),
+            account_home: Mutex::new(None),
         }
+    }
+
+    /// Gives the hosting account's password row these ids.
+    ///
+    /// For the refusal classes of the managed-account check: a uid or gid below
+    /// the host's floor is a system identity, and 0 is root's.
+    pub(crate) fn with_account_ids(self, uid: u32, gid: u32) -> Self {
+        *self.account_ids.lock().unwrap() = (uid, gid);
+
+        self
+    }
+
+    /// Gives the hosting account's password row this home instead of the
+    /// managed `/home/<name>`.
+    pub(crate) fn with_account_home(self, home: &str) -> Self {
+        *self.account_home.lock().unwrap() = Some(home.to_owned());
+
+        self
     }
 
     /// Makes `account_ownership` answer these in order, the last repeating.
@@ -592,6 +619,35 @@ impl SftpHost for FakeSftpHost {
         *asked += 1;
 
         answers[index].ok_or(SftpError::AccountMissing)
+    }
+
+    /// Decides through the shipped [`ManagedAccount`] rule over a one-row
+    /// password text the fake composes from the ids and home it holds, so the
+    /// fake never has an opinion of its own about who counts as managed.
+    fn managed_account(
+        &self,
+        passwd_database: &str,
+        account: &AccountName,
+    ) -> Result<ManagedAccount, SftpError> {
+        assert!(
+            passwd_database.starts_with('/'),
+            "the password database must be an absolute path from the adapter: {passwd_database}"
+        );
+
+        if !*self.account_exists.lock().unwrap() {
+            return Err(SftpError::AccountMissing);
+        }
+
+        let (uid, gid) = *self.account_ids.lock().unwrap();
+        let home = self
+            .account_home
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| format!("/home/{}", account.as_str()));
+        let passwd = format!("{}:x:{uid}:{gid}::{home}:/bin/sh\n", account.as_str());
+
+        ManagedAccount::resolve(account.clone(), &passwd).map_err(SftpError::from_managed_account)
     }
 
     /// Records the directory and its mode.

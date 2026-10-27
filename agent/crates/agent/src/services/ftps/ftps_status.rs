@@ -37,6 +37,9 @@ pub fn to_agent_error(error: &FtpsError) -> AgentError {
         FtpsError::NotFound | FtpsError::AccountMissing | FtpsError::CertificateMissing { .. } => {
             ErrorCode::NotFound
         }
+        // The name is not a managed hosting account (reserved, system identity or
+        // wrong home). A request fault with a fixed sentence that names no rule.
+        FtpsError::AccountNotManaged => ErrorCode::InvalidInput,
         // The rendered configuration was refused by the daemon that would have
         // to read it. VALIDATION_FAILED is the code the contract defines for
         // exactly this — "rendered config failed its validator; state rolled

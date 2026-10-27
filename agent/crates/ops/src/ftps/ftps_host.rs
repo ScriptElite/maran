@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use maran_agent_core::command_outcome::CommandOutcome;
 use maran_agent_core::validation::system::ftps_user_name::FtpsUserName;
+use maran_agent_core::validation::system::managed_account::ManagedAccount;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_agent_core::validation::web::domain::Domain;
 
@@ -194,6 +195,28 @@ pub trait FtpsHost: Send + Sync {
     /// Returns [`FtpsError::AccountMissing`] when the password database holds
     /// no such account, or cannot be read.
     fn account_ownership(&self, account: &AccountName) -> Result<AccountOwnership, FtpsError>;
+
+    /// Proves that `account` is a hosting account this panel may act on.
+    ///
+    /// Called first by every login operation that sets a password with
+    /// `chpasswd`, under the account's lock and before anything is created or
+    /// changed: a login is a copy of the account's identity, so a login created
+    /// for an operator's own user shares that user's uid and gives its holder
+    /// the user's home. `passwd_database` is the distro's path of the local
+    /// password database, which the implementation reads whole and hands to
+    /// [`ManagedAccount::resolve`]; nothing else is read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FtpsError::AccountMissing`] when the database has no such row or
+    /// cannot be read (an unreadable database proves nothing, so it refuses),
+    /// and [`FtpsError::AccountNotManaged`] when the account is reserved, has a
+    /// system identity, or has the wrong home.
+    fn managed_account(
+        &self,
+        passwd_database: &str,
+        account: &AccountName,
+    ) -> Result<ManagedAccount, FtpsError>;
 
     /// Creates `path`, owned by root, and applies `mode` **to `path` alone**.
     ///

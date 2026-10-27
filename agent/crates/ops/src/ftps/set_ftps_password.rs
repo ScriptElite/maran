@@ -165,6 +165,10 @@ const LOCK: &str = "--lock";
 ///   raised before `chpasswd` runs, so the password is unchanged.
 /// - [`FtpsError::AccountMissing`] when the password database cannot be read at
 ///   all.
+/// - [`FtpsError::AccountNotManaged`] and [`FtpsError::AccountMissing`] when
+///   `account` is not a hosting account this panel may act on (reserved, a
+///   system identity, the wrong home, or no local row). Checked before the jail
+///   is read, the login is looked up or anything is written.
 /// - [`FtpsError::PasswordRejected`] when `chpasswd` refuses the line — the
 ///   login exists and its password is unchanged.
 /// - [`FtpsError::SuspensionNotRestored`] when the password was set but the
@@ -183,8 +187,14 @@ pub fn set_ftps_password(
     // including every error path and a panic.
     let _guard = take_account_lock(account).ok_or(FtpsError::AccountBusy)?;
 
-    let jail = FtpsJail::for_account(account, distro.systemd_unit_directory());
-    let logins = host.account_logins(distro.passwd_database(), account, jail.directory())?;
+    // The gate comes before the jail is read or anything is written: the
+    // login this changes is a copy of the account's identity, and `chpasswd`
+    // on a login whose account is a system user or an operator's own login is
+    // the escalation this check exists to refuse.
+    let managed = host.managed_account(distro.passwd_database(), account)?;
+
+    let jail = FtpsJail::for_account(managed.name(), distro.systemd_unit_directory());
+    let logins = host.account_logins(distro.passwd_database(), managed.name(), jail.directory())?;
     if !logins.iter().any(|held| held.as_str() == user.as_str()) {
         return Err(FtpsError::NotFound);
     }

@@ -37,6 +37,9 @@ const MAXIMUM_OUTPUT: usize = 64 * 1024;
 ///
 /// # Errors
 ///
+/// - [`CronError::Account`] when `account` is not a hosting account this panel
+///   may act on (reserved, absent, a system identity, or with the wrong home).
+///   Checked first, before the crontab or the home is touched.
 /// - [`CronError::NotFound`] when the account has no managed entry with that
 ///   id.
 /// - [`CronError::CrontabRefused`] when the crontab could not be read.
@@ -48,7 +51,8 @@ pub fn get_cron_entry_output(
     account: &AccountName,
     id: &CronEntryId,
 ) -> Result<CronEntryOutput, CronError> {
-    let existing = host.read_crontab(account)?.unwrap_or_default();
+    let managed = host.managed_account(account)?;
+    let existing = host.read_crontab(&managed)?.unwrap_or_default();
     let document = CrontabDocument::parse(&existing);
 
     if document.entry(id).is_none() {
@@ -56,8 +60,8 @@ pub fn get_cron_entry_output(
     }
 
     Ok(CronEntryOutput {
-        output: host.read_output_tail(account, id, MAXIMUM_OUTPUT)?,
-        last_run: host.read_run_record(account, id)?,
+        output: host.read_output_tail(&managed, id, MAXIMUM_OUTPUT)?,
+        last_run: host.read_run_record(&managed, id)?,
     })
 }
 

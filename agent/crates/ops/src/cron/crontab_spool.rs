@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use maran_agent_core::agent_paths::AgentPaths;
 use maran_agent_core::command_outcome::CommandOutcome;
 use maran_agent_core::utils::apply_child_environment::apply_child_environment;
-use maran_agent_core::validation::system::name::AccountName;
+use maran_agent_core::validation::system::managed_account::ManagedAccount;
 use maran_distro::DistroAdapter;
 
 use crate::cron::cron_error::{CronError, PROGRAM_UNAVAILABLE};
@@ -102,6 +102,11 @@ const TABLE_PREFIX: &str = "crontab";
 /// `ops`. Nothing here touches a customer's home; the two operations that do
 /// fork and drop first.
 ///
+/// **The `-u` argument is always a [`ManagedAccount`]**, never a bare name, so
+/// `crontab -u root` and every other system user's table are unreachable from
+/// here: the proof was resolved by the caller and is checked before this
+/// program is ever run.
+///
 /// **There is no partial install.** The table replaces what was there or it
 /// does not, which is what lets every operation in this area render the WHOLE
 /// document and hand it over instead of editing lines in place on a file two
@@ -130,7 +135,7 @@ impl CrontabSpool {
         Self { distro }
     }
 
-    /// Reads `account`'s table with `crontab -u <account> -l`, bounded.
+    /// Reads the managed `account`'s table with `crontab -u <account> -l`, bounded.
     ///
     /// The read is bounded at [`CRONTAB_CEILING`] because the answer is an
     /// account's own file; what the answer MEANS is decided by
@@ -141,10 +146,10 @@ impl CrontabSpool {
     /// Returns [`CronError::CrontabRefused`] when the program refuses for a
     /// reason that is not "this account has no table", cannot be run at all, or
     /// answers more than the ceiling.
-    pub(crate) fn read(&self, account: &AccountName) -> Result<Option<String>, CronError> {
+    pub(crate) fn read(&self, account: &ManagedAccount) -> Result<Option<String>, CronError> {
         let outcome = Self::run_bounded(
             self.distro.crontab_binary(),
-            &[USER_FLAG, account.as_str(), LIST_FLAG],
+            &[USER_FLAG, account.name().as_str(), LIST_FLAG],
             CRONTAB_CEILING,
         )?;
 
@@ -158,12 +163,20 @@ impl CrontabSpool {
     /// Returns [`CronError::CrontabRefused`] when the table cannot be staged,
     /// when the program cannot be run, or when it refuses the table — with the
     /// program's own exit status in the last case.
-    pub(crate) fn install(&self, account: &AccountName, contents: &str) -> Result<(), CronError> {
+    pub(crate) fn install(
+        &self,
+        account: &ManagedAccount,
+        contents: &str,
+    ) -> Result<(), CronError> {
         let path = Self::write_table(contents)?;
 
         let outcome = Self::run(
             self.distro.crontab_binary(),
-            &[USER_FLAG, account.as_str(), &path.display().to_string()],
+            &[
+                USER_FLAG,
+                account.name().as_str(),
+                &path.display().to_string(),
+            ],
         );
 
         // Best effort, and before the outcome is examined so that no early

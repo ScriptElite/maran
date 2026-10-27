@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use maran_agent_core::command_outcome::CommandOutcome;
+use maran_agent_core::validation::system::managed_account::ManagedAccount;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_agent_core::validation::system::sftp_user_name::SftpUserName;
 
@@ -68,6 +69,28 @@ pub trait SftpHost: Send + Sync {
     /// Returns [`SftpError::AccountMissing`] when the password database holds
     /// no such account, or cannot be read.
     fn account_ownership(&self, account: &AccountName) -> Result<AccountOwnership, SftpError>;
+
+    /// Proves that `account` is a hosting account this panel may act on.
+    ///
+    /// Called first by every login operation that sets a password with
+    /// `chpasswd`, under the account's lock and before anything is created or
+    /// changed: a login is a copy of the account's identity, so a login created
+    /// for an operator's own user shares that user's uid and gives its holder
+    /// the user's home. `passwd_database` is the distro's path of the local
+    /// password database, which the implementation reads whole and hands to
+    /// [`ManagedAccount::resolve`]; nothing else is read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SftpError::AccountMissing`] when the database has no such row or
+    /// cannot be read (an unreadable database proves nothing, so it refuses),
+    /// and [`SftpError::AccountNotManaged`] when the account is reserved, has a
+    /// system identity, or has the wrong home.
+    fn managed_account(
+        &self,
+        passwd_database: &str,
+        account: &AccountName,
+    ) -> Result<ManagedAccount, SftpError>;
 
     /// Creates `path` and every missing parent, at `mode`, owned by root.
     ///

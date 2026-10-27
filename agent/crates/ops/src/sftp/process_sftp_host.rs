@@ -12,9 +12,11 @@ use maran_agent_core::privs::account_ids::AccountIds;
 use maran_agent_core::utils::apply_child_environment::apply_child_environment;
 use maran_agent_core::utils::spawn_argv::spawn_argv;
 use maran_agent_core::utils::system_accounts::system_accounts;
+use maran_agent_core::validation::system::managed_account::ManagedAccount;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_agent_core::validation::system::sftp_user_name::SftpUserName;
 
+use crate::accounts::read_managed_account;
 use crate::safe_write::model::{Reload, Validator};
 use crate::safe_write::{ConfigHost, SafeWriteError, write_config};
 use crate::sftp::model::account_ownership::AccountOwnership;
@@ -138,10 +140,24 @@ impl SftpHost for ProcessSftpHost {
         })
     }
 
+    /// Resolves `account` against the local password database, read here whole.
+    ///
+    /// The file is read by this host and handed to the type as text; the type
+    /// reads nothing itself. A file that cannot be read is
+    /// [`SftpError::AccountMissing`], the same answer as an absent row.
+    fn managed_account(
+        &self,
+        passwd_database: &str,
+        account: &AccountName,
+    ) -> Result<ManagedAccount, SftpError> {
+        read_managed_account(passwd_database, account).map_err(SftpError::from_managed_account)
+    }
+
     /// Resolves `account` through the host's password database.
     ///
-    /// `AccountIds::resolve` is the one lookup in this repository, reused
-    /// rather than a second `getpwnam` written here: it already refuses `root`,
+    /// `AccountIds::resolve` is the lookup of the ids, reused rather than
+    /// a second `getpwnam` written here, and `managed_account` is the gate that
+    /// runs before it. It already refuses `root`,
     /// the root group and the system id range, so an SFTP login cannot be
     /// created with a privileged identity even if a name that resolves to one
     /// somehow reached this point.

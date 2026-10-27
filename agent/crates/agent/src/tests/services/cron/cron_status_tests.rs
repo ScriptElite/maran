@@ -12,6 +12,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use maran_agent_core::privs::priv_error::PrivError;
+use maran_agent_core::validation::system::managed_account_error::ManagedAccountError;
 use maran_ops::cron::CronError;
 
 use super::to_agent_error;
@@ -29,6 +30,10 @@ fn every_variant() -> Vec<CronError> {
         CronError::EntryFileUnremovable,
         CronError::EntryIdUnavailable,
         CronError::EntryLimitReached,
+        CronError::Account(ManagedAccountError::Reserved),
+        CronError::Account(ManagedAccountError::NotFound),
+        CronError::Account(ManagedAccountError::SystemIdentity),
+        CronError::Account(ManagedAccountError::WrongHome),
     ]
 }
 
@@ -156,4 +161,49 @@ fn no_mapped_failure_carries_a_programs_output() {
             "the mapping must not invent a message beside the variant's own"
         );
     }
+}
+
+#[test]
+fn a_user_that_is_not_a_hosting_account_is_an_invalid_input_and_never_a_fault() {
+    // Reserved, a system identity and a home elsewhere are one answer to the
+    // panel: the request names an account it does not manage, and no crontab
+    // was read or installed. Not SYSTEM_FAILURE, because nothing on the host is
+    // broken; not ACCOUNT_BUSY, which invites the identical request again.
+    for refusal in [
+        ManagedAccountError::Reserved,
+        ManagedAccountError::SystemIdentity,
+        ManagedAccountError::WrongHome,
+    ] {
+        let code = code_of(&CronError::Account(refusal));
+
+        assert_eq!(code, ErrorCode::InvalidInput as i32);
+        assert_ne!(code, ErrorCode::SystemFailure as i32);
+        assert_ne!(code, ErrorCode::AccountBusy as i32);
+    }
+}
+
+#[test]
+fn an_account_with_no_password_database_row_is_not_found_and_not_invalid_input() {
+    // The inverse control for the arm above: the absent account keeps the
+    // answer an absent entry gets, so the catch-all cannot have swallowed it.
+    assert_eq!(
+        code_of(&CronError::Account(ManagedAccountError::NotFound)),
+        ErrorCode::NotFound as i32
+    );
+}
+
+#[test]
+fn the_not_managed_sentence_is_the_same_for_every_refusal_and_names_no_rule() {
+    let sentences: Vec<String> = [
+        ManagedAccountError::Reserved,
+        ManagedAccountError::SystemIdentity,
+        ManagedAccountError::WrongHome,
+    ]
+    .into_iter()
+    .map(|refusal| to_agent_error(&CronError::Account(refusal)).message)
+    .collect();
+
+    assert_eq!(sentences[0], sentences[1]);
+    assert_eq!(sentences[1], sentences[2]);
+    assert_eq!(sentences[0], "the account is not a hosting account");
 }

@@ -9,7 +9,7 @@
 // bans on unwrap/expect/panic are lifted here only.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
 
 use crate::accounts::model::home_metadata::HomeMetadata;
@@ -17,6 +17,7 @@ use crate::accounts::model::home_metadata::HomeMetadata;
 use maran_agent_core::validation::db::database_name::DatabaseName;
 use maran_agent_core::validation::db::db_user_name::DbUserName;
 use maran_agent_core::validation::secrets::password::Password;
+use maran_agent_core::validation::system::managed_account_error::ManagedAccountError;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_agent_core::validation::web::php_version::PhpVersion;
 
@@ -76,14 +77,32 @@ struct RecordingHost {
     size: u64,
     /// How many times the host has been asked whether a user exists.
     ///
-    /// Counted because the deletion asks TWICE — once at the start and once
-    /// immediately before `userdel` — and `user_exists` is a trait method
-    /// rather than a spawn, so the recorded argv cannot see it. A test that
-    /// asserted on the argv would be blind to exactly the check it is about.
+    /// Counted because only account creation asks it now (to refuse a name that
+    /// already belongs to any user), and `user_exists` is a trait method rather
+    /// than a spawn, so the recorded argv cannot see it. The tests that a
+    /// reserved name costs no lookup, and that an existing account is resolved
+    /// from the password database instead, assert on this count.
     existence_questions: Mutex<usize>,
 
-    /// What `read_password_database` returns, for the home-group repair tests.
+    /// What `read_password_database` returns, for the managed-account
+    /// resolution and the home-group repair tests.
     passwd: Mutex<String>,
+
+    /// Answers `read_password_database` hands out first, one per read, before
+    /// it falls back to [`RecordingHost::passwd`]. For the tests that need the
+    /// host to change between two resolutions of the same deletion.
+    passwd_script: Mutex<VecDeque<String>>,
+
+    /// How many times the password database has been read.
+    ///
+    /// Counted because every operation on an existing account resolves its
+    /// managed account from that file, and a deletion resolves it TWICE (at the
+    /// start and immediately before `userdel`). The read is a trait method and
+    /// not a spawn, so the recorded argv cannot see it.
+    passwd_reads: Mutex<usize>,
+
+    /// Whether `read_password_database` fails, for the fail-closed tests.
+    passwd_unreadable: Mutex<bool>,
 
     /// What `home_metadata` answers for a given path, for the home-group
     /// repair tests. A path absent from the map answers `None` — nothing at
@@ -116,6 +135,9 @@ impl RecordingHost {
             size: 0,
             existence_questions: Mutex::new(0),
             passwd: Mutex::new(String::new()),
+            passwd_script: Mutex::new(VecDeque::new()),
+            passwd_reads: Mutex::new(0),
+            passwd_unreadable: Mutex::new(false),
             homes: Mutex::new(HashMap::new()),
             mounts: Mutex::new(
                 "/dev/sda1 /home ext4 rw,relatime,usrquota,grpquota 0 0\n".to_owned(),
@@ -163,11 +185,50 @@ impl RecordingHost {
         self
     }
 
+    /// Makes `username` a hosting account of this host: a user the host knows
+    /// AND a managed row in its password database (uid and gid 1001, home
+    /// `/home/<username>`), which is what every operation on an existing
+    /// account now resolves before it acts.
     fn with_user(self, username: &str) -> Self {
         self.existing
             .lock()
             .expect("the fixture lock is never poisoned")
             .insert(username.to_owned());
+        self.with_passwd_row(&passwd_row(
+            username,
+            1001,
+            1001,
+            &format!("/home/{username}"),
+        ))
+    }
+
+    /// Appends one raw line to the password database, without making the host
+    /// answer `user_exists` for it. For the users an operation must REFUSE:
+    /// they are in the file, and the question is only whether they are accepted.
+    fn with_passwd_row(self, row: &str) -> Self {
+        self.passwd
+            .lock()
+            .expect("the fixture lock is never poisoned")
+            .push_str(row);
+        self
+    }
+
+    /// Makes every read of the password database fail.
+    fn with_unreadable_passwd(self) -> Self {
+        *self
+            .passwd_unreadable
+            .lock()
+            .expect("the fixture lock is never poisoned") = true;
+        self
+    }
+
+    /// Makes the next reads of the password database answer `texts` in order,
+    /// one each, before falling back to the ordinary database.
+    fn with_passwd_script(self, texts: &[String]) -> Self {
+        self.passwd_script
+            .lock()
+            .expect("the fixture lock is never poisoned")
+            .extend(texts.iter().cloned());
         self
     }
 
@@ -217,6 +278,14 @@ impl RecordingHost {
 
     fn calls(&self) -> Vec<Vec<String>> {
         self.recording.calls()
+    }
+
+    /// How many times the password database was read.
+    fn passwd_reads(&self) -> usize {
+        *self
+            .passwd_reads
+            .lock()
+            .expect("the fixture lock is never poisoned")
     }
 
     /// How many times this host was asked whether a user exists.
@@ -278,6 +347,25 @@ impl SystemHost for RecordingHost {
         self.recording
             .set_next(status, &stdout, &self.stderr_for(status));
 
+        // A `useradd` that succeeded leaves the user in the password database,
+        // as it does on a real host: the creation resolves the account it just
+        // made, and a fixture that never learned of it would refuse its own
+        // creation as absent.
+        if let Some(created) = arguments
+            .last()
+            .filter(|_| status == 0 && program.ends_with("useradd"))
+        {
+            self.passwd
+                .lock()
+                .expect("the fixture lock is never poisoned")
+                .push_str(&passwd_row(
+                    created,
+                    1001,
+                    1001,
+                    &format!("/home/{created}"),
+                ));
+        }
+
         Ok(self.recording.record(program, arguments))
     }
 
@@ -298,6 +386,28 @@ impl SystemHost for RecordingHost {
     }
 
     fn read_password_database(&self, _path: &str) -> Result<String, AccountError> {
+        *self
+            .passwd_reads
+            .lock()
+            .expect("the fixture lock is never poisoned") += 1;
+        if *self
+            .passwd_unreadable
+            .lock()
+            .expect("the fixture lock is never poisoned")
+        {
+            return Err(AccountError::HomeInspection {
+                reason: "the fixture's password database is unreadable".to_owned(),
+            });
+        }
+        if let Some(scripted) = self
+            .passwd_script
+            .lock()
+            .expect("the fixture lock is never poisoned")
+            .pop_front()
+        {
+            return Ok(scripted);
+        }
+
         Ok(self
             .passwd
             .lock()
@@ -321,6 +431,11 @@ impl SystemHost for RecordingHost {
             .get(path)
             .copied())
     }
+}
+
+/// One line of a password database.
+fn passwd_row(name: &str, uid: u32, gid: u32, home: &str) -> String {
+    format!("{name}:x:{uid}:{gid}::{home}:/usr/sbin/nologin\n")
 }
 
 /// Operations bound to a recording host and the Debian adapter, which is what the
@@ -2023,12 +2138,12 @@ fn a_deletion_that_finished_leaves_the_accounts_lock_free_for_the_next_one() {
 }
 
 #[test]
-fn the_account_is_confirmed_to_still_exist_immediately_before_userdel() {
-    // The check-then-act closure. The first lookup is several process spawns
-    // old by the time `userdel --remove` runs — a database drop, an SFTP
+fn the_account_is_resolved_again_immediately_before_userdel() {
+    // The check-then-act closure. The first resolution is several process
+    // spawns old by the time `userdel --remove` runs — a database drop, an SFTP
     // teardown with a `systemctl` call in it, a crontab removal and a pool
     // sweep — and a validated `AccountName` proves the name is well formed,
-    // never that the account is still there.
+    // never that the account is still there or still the same user.
     let account = AccountName::parse("deleterecheck").expect("the fixture name is valid");
     let operations = debian(RecordingHost::new().with_user(account.as_str()));
 
@@ -2043,9 +2158,14 @@ fn the_account_is_confirmed_to_still_exist_immediately_before_userdel() {
         .expect("deletion succeeds");
 
     assert_eq!(
-        operations.host().existence_questions(),
+        operations.host().passwd_reads(),
         2,
-        "the deletion must confirm the account twice: once at the start and once before userdel"
+        "the deletion must resolve the account twice: once at the start and once before userdel"
+    );
+    assert_eq!(
+        operations.host().existence_questions(),
+        0,
+        "an existing account is resolved from the password database, not asked about by name"
     );
 }
 
@@ -2130,7 +2250,7 @@ fn a_deletion_waits_for_the_accounts_crontab_lock_before_removing_its_table() {
     // statement about the crontab lock and not about a thread that never
     // started.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while operations.host().existence_questions() == 0 {
+    while operations.host().passwd_reads() == 0 {
         assert!(
             std::time::Instant::now() < deadline,
             "the deletion never started: this test measured nothing"
@@ -2501,4 +2621,507 @@ fn a_second_pass_over_an_already_repaired_host_is_a_true_no_op() {
         operations_calls(&operations, "chgrp").is_empty(),
         "a host this repair already fixed must not be chgrp'd again"
     );
+}
+
+// `ManagedAccount`: every operation on an existing account resolves the host
+// user behind the name to a hosting account before it runs anything as root.
+
+/// Users that are in the password database and that no operation may act on,
+/// each with the refusal its row earns.
+///
+/// The reserved ones carry otherwise unobjectionable rows (`ubuntu` at 1000,
+/// under `/home`), so the list and not the floor is what stops them.
+fn unmanaged_users() -> Vec<(&'static str, String, ManagedAccountError)> {
+    vec![
+        (
+            "root",
+            passwd_row("root", 0, 0, "/root"),
+            ManagedAccountError::Reserved,
+        ),
+        (
+            "ubuntu",
+            passwd_row("ubuntu", 1000, 1000, "/home/ubuntu"),
+            ManagedAccountError::Reserved,
+        ),
+        (
+            "lpdaemon",
+            passwd_row("lpdaemon", 100, 100, "/home/lpdaemon"),
+            ManagedAccountError::SystemIdentity,
+        ),
+        (
+            "gidlow",
+            passwd_row("gidlow", 1001, 100, "/home/gidlow"),
+            ManagedAccountError::SystemIdentity,
+        ),
+        (
+            "opsadmin",
+            passwd_row("opsadmin", 1001, 1001, "/srv/opsadmin"),
+            ManagedAccountError::WrongHome,
+        ),
+        (
+            "acme_web",
+            passwd_row("acme_web", 1001, 1001, "/var/lib/maran-sftp/acme"),
+            ManagedAccountError::WrongHome,
+        ),
+    ]
+}
+
+/// Runs every operation that acts on an existing account, in turn, on the same
+/// host and returns each one's outcome with its name.
+///
+/// The deletion is driven through its under-lock entry so that two tests naming
+/// the same user never refuse each other on the process-wide account lock.
+fn each_operation_on(
+    operations: &AccountOperations<RecordingHost>,
+    account: &AccountName,
+) -> Vec<(&'static str, Result<(), AccountError>)> {
+    vec![
+        ("suspend", operations.suspend(account)),
+        ("unsuspend", operations.unsuspend(account)),
+        (
+            "suspension_state",
+            operations
+                .suspension_state(
+                    &FakeSiteHost::passing(),
+                    &quiet_cron_host(),
+                    &quiet_logins_host(),
+                    account,
+                )
+                .map(|_| ()),
+        ),
+        (
+            "delete",
+            operations
+                .delete_under_lock(
+                    &FakePhpHost::empty(),
+                    &no_databases(),
+                    &no_sftp(),
+                    &no_ftps(),
+                    account,
+                )
+                .map(|_| ()),
+        ),
+        ("set_quota", operations.set_quota(account, 1024)),
+        ("usage", operations.usage(account).map(|_| ())),
+    ]
+}
+
+#[test]
+fn every_operation_refuses_a_user_the_panel_does_not_manage_and_runs_nothing() {
+    for (user, row, expected) in unmanaged_users() {
+        let account = AccountName::parse(user).expect("the fixture name is valid");
+        let operations = debian(RecordingHost::new().with_passwd_row(&row));
+
+        for (operation, outcome) in each_operation_on(&operations, &account) {
+            match outcome {
+                Err(AccountError::NotManaged { username, refusal }) => {
+                    assert_eq!(username, user, "{operation} named the wrong user");
+                    assert_eq!(refusal, expected, "{operation} on {user}");
+                }
+                other => {
+                    panic!("{operation} on {user} must be refused as unmanaged, got {other:?}")
+                }
+            }
+        }
+
+        assert!(
+            operations.host().calls().is_empty(),
+            "{user}: no program may run for a user that is not a hosting account, got {:?}",
+            operations.host().calls()
+        );
+    }
+}
+
+#[test]
+fn the_same_operations_succeed_for_a_hosting_account() {
+    // The inverse control for the refusal above: a gate mutated to refuse
+    // everyone passes every test that only ever hands it a refused user.
+    let operations = debian(
+        RecordingHost::new()
+            .with_user("acme")
+            .with_stdout(&shadow_entry("!")),
+    );
+
+    operations.suspend(&name()).expect("suspension succeeds");
+    operations
+        .unsuspend(&name())
+        .expect("unsuspension succeeds");
+    operations
+        .set_quota(&name(), 2048)
+        .expect("the quota is set");
+    operations
+        .delete_under_lock(
+            &FakePhpHost::empty(),
+            &no_databases(),
+            &no_sftp(),
+            &no_ftps(),
+            &name(),
+        )
+        .expect("deletion succeeds");
+
+    assert!(!operations_calls(&operations, "usermod").is_empty());
+    assert!(!operations_calls(&operations, "setquota").is_empty());
+    assert!(!operations_calls(&operations, "userdel").is_empty());
+}
+
+#[test]
+fn an_absent_user_is_not_found_and_is_not_reported_as_unmanaged() {
+    let account = AccountName::parse("nobodyhere").expect("the fixture name is valid");
+    let operations = debian(RecordingHost::new());
+
+    for (operation, outcome) in each_operation_on(&operations, &account) {
+        assert!(
+            matches!(
+                outcome,
+                Err(AccountError::NotFound { ref username }) if username == "nobodyhere"
+            ),
+            "{operation} on an absent user must be NotFound, got {outcome:?}"
+        );
+    }
+    assert!(operations.host().calls().is_empty());
+}
+
+#[test]
+fn a_user_named_twice_in_the_password_database_is_not_found_by_any_operation() {
+    // Ambiguity is refused and never resolved by picking one of the rows.
+    let account = AccountName::parse("dupuser").expect("the fixture name is valid");
+    let operations = debian(
+        RecordingHost::new()
+            .with_passwd_row(&passwd_row("dupuser", 1001, 1001, "/home/dupuser"))
+            .with_passwd_row(&passwd_row("dupuser", 1002, 1002, "/home/dupuser")),
+    );
+
+    for (operation, outcome) in each_operation_on(&operations, &account) {
+        assert!(
+            matches!(outcome, Err(AccountError::NotFound { .. })),
+            "{operation} on an ambiguous user must be NotFound, got {outcome:?}"
+        );
+    }
+    assert!(operations.host().calls().is_empty());
+}
+
+#[test]
+fn a_password_database_that_cannot_be_read_refuses_every_operation_and_runs_nothing() {
+    // Fail closed: when the host cannot say who the user is, nothing is done.
+    let operations = debian(
+        RecordingHost::new()
+            .with_user("acme")
+            .with_unreadable_passwd(),
+    );
+
+    for (operation, outcome) in each_operation_on(&operations, &name()) {
+        assert!(
+            matches!(outcome, Err(AccountError::HomeInspection { .. })),
+            "{operation} must refuse when the password database is unreadable, got {outcome:?}"
+        );
+    }
+    assert!(operations.host().calls().is_empty());
+}
+
+#[test]
+fn a_refusal_names_no_rule_and_no_path() {
+    let account = AccountName::parse("opsadmin").expect("the fixture name is valid");
+    let operations = debian(RecordingHost::new().with_passwd_row(&passwd_row(
+        "opsadmin",
+        1001,
+        1001,
+        "/srv/opsadmin",
+    )));
+
+    let refusal = operations
+        .suspend(&account)
+        .expect_err("a user with another home is refused");
+    let sentence = refusal.to_string();
+
+    assert_eq!(
+        sentence,
+        "account 'opsadmin' is not a hosting account this panel manages"
+    );
+    assert!(!sentence.contains("/srv"), "{sentence}");
+    assert!(!sentence.to_lowercase().contains("home"), "{sentence}");
+    assert!(!sentence.to_lowercase().contains("reserved"), "{sentence}");
+}
+
+#[test]
+fn a_refused_deletion_leaves_databases_logins_jails_crontab_and_pools_untouched() {
+    // The user is `acme` as every cascade fixture is, but its row puts the home
+    // elsewhere. Every step of the cascade before `userdel` has something to
+    // remove, so a refusal that came late would leave visible damage.
+    let databases = databases_of_acme();
+    let statements_before = databases.statements();
+    let sftp_host = sftp_of_acme();
+    let sftp_paths_before = sftp_host.paths();
+    let sftp_users_before = sftp_host.users();
+    let ftps_host = ftps_of_acme();
+    let ftps_logins_before = ftps_host.login_names();
+    let php_host = FakePhpHost::empty();
+    let operations = debian(
+        RecordingHost::new()
+            .with_user("acme")
+            .with_passwd(&passwd_row("acme", 1001, 1001, "/srv/acme")),
+    );
+
+    let refusal =
+        operations.delete_under_lock(&php_host, &databases, &sftp_host, &ftps_host, &name());
+
+    assert!(
+        matches!(
+            refusal,
+            Err(AccountError::NotManaged {
+                refusal: ManagedAccountError::WrongHome,
+                ..
+            })
+        ),
+        "expected NotManaged, got {refusal:?}"
+    );
+    assert_eq!(databases.statements(), statements_before);
+    assert_eq!(sftp_host.paths(), sftp_paths_before);
+    assert_eq!(sftp_host.users(), sftp_users_before);
+    assert_eq!(ftps_host.login_names(), ftps_logins_before);
+    assert!(ftps_host.is_mounted(), "the FTPS jail mount was taken down");
+    assert!(php_host.commands().is_empty());
+    assert_eq!(php_host.removals(), 0);
+    assert!(
+        operations.host().calls().is_empty(),
+        "no crontab removal and no userdel for a user that is not a hosting account: {:?}",
+        operations.host().calls()
+    );
+}
+
+#[test]
+fn a_deletion_resolves_the_account_only_after_taking_the_accounts_lock() {
+    // The lock stays the first statement and never waits: a held lock is Busy
+    // before the password database has been read at all.
+    let account = AccountName::parse("deletelockfirst").expect("the fixture name is valid");
+    let held = take_account_lock(&account).expect("the lock is free at the start of this test");
+    let operations = debian(RecordingHost::new().with_user(account.as_str()));
+
+    let refusal = operations.delete(
+        &FakePhpHost::empty(),
+        &no_databases(),
+        &no_sftp(),
+        &no_ftps(),
+        &account,
+    );
+
+    assert!(
+        matches!(refusal, Err(AccountError::Busy { .. })),
+        "expected Busy, got {refusal:?}"
+    );
+    assert_eq!(
+        operations.host().passwd_reads(),
+        0,
+        "the account was resolved before the lock was taken"
+    );
+    drop(held);
+}
+
+#[test]
+fn a_deletion_refuses_when_the_user_changed_identity_while_it_ran() {
+    // The user is removed by hand and a different one is given the name during
+    // the cascade: the second resolution sees other ids and `userdel` must not
+    // run. Each id is changed on its own, because comparing only one of them
+    // leaves the other swap open.
+    for (second_uid, second_gid) in [(1002, 1001), (1001, 1002)] {
+        let user = "deleteswapped";
+        let home = format!("/home/{user}");
+        let account = AccountName::parse(user).expect("the fixture name is valid");
+        let operations = debian(RecordingHost::new().with_passwd_script(&[
+            passwd_row(user, 1001, 1001, &home),
+            passwd_row(user, second_uid, second_gid, &home),
+        ]));
+
+        let refusal = operations.delete_under_lock(
+            &FakePhpHost::empty(),
+            &no_databases(),
+            &no_sftp(),
+            &no_ftps(),
+            &account,
+        );
+
+        assert!(
+            matches!(
+                refusal,
+                Err(AccountError::IdentityChanged { ref username }) if username == user
+            ),
+            "ids {second_uid}/{second_gid}: expected IdentityChanged, got {refusal:?}"
+        );
+        assert_eq!(operations.host().passwd_reads(), 2);
+        assert!(
+            !operations_calls(&operations, "crontab").is_empty(),
+            "the second resolution must come after the cascade, not before it"
+        );
+        assert!(
+            operations_calls(&operations, "userdel").is_empty(),
+            "userdel must not run for a user that was replaced"
+        );
+    }
+}
+
+#[test]
+fn a_deletion_whose_user_vanished_during_the_cascade_is_not_found_and_runs_no_userdel() {
+    let user = "deletevanished";
+    let account = AccountName::parse(user).expect("the fixture name is valid");
+    let operations = debian(RecordingHost::new().with_passwd_script(&[
+        passwd_row(user, 1001, 1001, &format!("/home/{user}")),
+        String::new(),
+    ]));
+
+    let refusal = operations.delete_under_lock(
+        &FakePhpHost::empty(),
+        &no_databases(),
+        &no_sftp(),
+        &no_ftps(),
+        &account,
+    );
+
+    assert!(
+        matches!(refusal, Err(AccountError::NotFound { .. })),
+        "expected NotFound, got {refusal:?}"
+    );
+    assert!(operations_calls(&operations, "userdel").is_empty());
+}
+
+#[test]
+fn creating_a_reserved_name_is_refused_before_the_host_is_asked_anything() {
+    for reserved in [
+        "root",
+        "mysql",
+        "nginx",
+        "admin",
+        "redis",
+        "ubuntu",
+        "maran_x",
+        "maran_agent",
+    ] {
+        let account = AccountName::parse(reserved).expect("the fixture name is valid");
+        let operations = debian(RecordingHost::new());
+
+        let refusal = operations.create(&account, 1024);
+
+        assert!(
+            matches!(
+                refusal,
+                Err(AccountError::NotManaged {
+                    refusal: ManagedAccountError::Reserved,
+                    ..
+                })
+            ),
+            "{reserved}: expected a reserved refusal, got {refusal:?}"
+        );
+        assert!(
+            operations.host().calls().is_empty(),
+            "{reserved}: nothing may run, useradd least of all"
+        );
+        assert_eq!(
+            operations.host().existence_questions(),
+            0,
+            "{reserved}: a reserved name must not cost a lookup, or it becomes an oracle"
+        );
+        assert_eq!(operations.host().passwd_reads(), 0);
+    }
+}
+
+#[test]
+fn a_reserved_name_that_already_exists_is_reserved_and_not_already_exists() {
+    let account = AccountName::parse("redis").expect("the fixture name is valid");
+    let operations = debian(RecordingHost::new().with_user("redis"));
+
+    let refusal = operations.create(&account, 0);
+
+    assert!(
+        matches!(refusal, Err(AccountError::NotManaged { .. })),
+        "expected NotManaged, got {refusal:?}"
+    );
+    assert_eq!(operations.host().existence_questions(), 0);
+}
+
+#[test]
+fn creating_a_name_that_is_not_reserved_still_runs_useradd() {
+    // The inverse control for the refusal above, over names that sit next to
+    // the reserved ones: a prefix or substring match would refuse them.
+    for ordinary in ["acme", "rooted", "mysqlfan", "adminco", "marana", "marandi"] {
+        let account = AccountName::parse(ordinary).expect("the fixture name is valid");
+        let operations = debian(RecordingHost::new());
+
+        let created = operations.create(&account, 0);
+
+        assert!(created.is_ok(), "{ordinary}: {created:?}");
+        assert_eq!(operations_calls(&operations, "useradd").len(), 1);
+    }
+}
+
+#[test]
+fn a_creation_whose_account_would_not_be_manageable_is_rolled_back() {
+    // The host's id floor moved, or `useradd` placed the home elsewhere: the
+    // account just made is one every later operation would refuse, so it is
+    // taken out again rather than left for nothing to delete.
+    let user = "lowcreated";
+    let account = AccountName::parse(user).expect("the fixture name is valid");
+    let operations = debian(RecordingHost::new().with_passwd_script(&[passwd_row(
+        user,
+        100,
+        100,
+        &format!("/home/{user}"),
+    )]));
+
+    let refusal = operations.create(&account, 0);
+
+    assert!(
+        matches!(
+            refusal,
+            Err(AccountError::NotManaged {
+                refusal: ManagedAccountError::SystemIdentity,
+                ..
+            })
+        ),
+        "expected NotManaged, got {refusal:?}"
+    );
+    assert_eq!(
+        operations_calls(&operations, "userdel")[0],
+        vec![tool_path(&operations, "userdel").as_str(), "--remove", user]
+    );
+}
+
+#[test]
+fn the_home_group_repair_skips_users_the_panel_does_not_manage_and_still_reports_a_wrong_home() {
+    let ok = AccountName::parse("acmeok").expect("the fixture name is valid");
+    let ok_home = AccountOperations::<RecordingHost>::home_directory(&ok);
+    let passwd = format!(
+        "{}{}{}{}{}",
+        passwd_row("ubuntu", 1000, 1000, "/home/ubuntu"),
+        passwd_row("mysql", 1500, 1500, "/home/mysql"),
+        passwd_row("lowdaemon", 100, 100, "/home/lowdaemon"),
+        passwd_row("acmeok", 2001, 2001, &ok_home),
+        passwd_row("svcuser", 2002, 2002, "/srv/svcuser"),
+    );
+    let operations = debian(
+        repair_host()
+            .with_passwd(&passwd)
+            .with_home(&ok_home, ordinary_home(2001, 2001)),
+    );
+
+    let report = operations
+        .repair_home_groups(false)
+        .expect("the live pass must succeed");
+
+    assert_eq!(
+        report.examined, 2,
+        "only the hosting account and the wrong-home user are examined"
+    );
+    assert_eq!(report.repaired.len(), 1);
+    assert_eq!(report.repaired[0].account, ok);
+    assert_eq!(report.refused.len(), 1);
+    assert_eq!(report.refused[0].account.as_str(), "svcuser");
+    assert_eq!(
+        report.refused[0].reason,
+        HomeGroupRepairRefusal::HomeNotAtExpectedPath
+    );
+    let chgrp = operations_calls(&operations, "chgrp");
+    assert_eq!(
+        chgrp.len(),
+        1,
+        "only the hosting account is re-grouped: {chgrp:?}"
+    );
+    assert!(chgrp[0].contains(&ok_home));
 }

@@ -3,6 +3,7 @@
 use maran_agent_core::validation::system::cron_command::CronCommand;
 use maran_agent_core::validation::system::cron_entry_id::CronEntryId;
 use maran_agent_core::validation::system::cron_schedule::CronSchedule;
+use maran_agent_core::validation::system::managed_account::ManagedAccount;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_distro::DistroAdapter;
 
@@ -73,6 +74,9 @@ use crate::cron::model::crontab_document::CrontabDocument;
 ///
 /// # Errors
 ///
+/// - [`CronError::Account`] when `account` is not a hosting account this panel
+///   may act on (reserved, absent, a system identity, or with the wrong home).
+///   Checked first, before the crontab or the home is touched.
 /// - [`CronError::AlreadyExists`] when the account already has an entry with
 ///   this schedule and command, enabled or not. Nothing is written. Decided
 ///   BEFORE the allowance, so an idempotent retry keeps this answer even when
@@ -104,11 +108,12 @@ pub fn create_cron_entry(
     // still overwrite whatever landed in between. Per account, process-local —
     // see `cron_lock` for the whole argument.
     let _crontab = cron_lock(account);
+    let managed = host.managed_account(account)?;
 
-    let existing = host.read_crontab(account)?.unwrap_or_default();
+    let existing = host.read_crontab(&managed)?.unwrap_or_default();
     let mut document = CrontabDocument::parse(&existing);
 
-    if is_duplicate(host, account, &document, schedule, command)? {
+    if is_duplicate(host, &managed, &document, schedule, command)? {
         return Err(CronError::AlreadyExists);
     }
 
@@ -129,7 +134,7 @@ pub fn create_cron_entry(
     }
 
     let id = host.new_entry_id()?;
-    host.write_command_file(account, &id, command)?;
+    host.write_command_file(&managed, &id, command)?;
 
     document.append(CronEntry {
         id: id.clone(),
@@ -143,13 +148,14 @@ pub fn create_cron_entry(
         command: None,
     });
 
-    if let Err(refusal) =
-        host.install_crontab(account, &document.render(account, distro.sh_binary()))
-    {
+    if let Err(refusal) = host.install_crontab(
+        &managed,
+        &document.render(managed.name(), distro.sh_binary()),
+    ) {
         // Best effort, and its failure is deliberately not reported: the
         // operation already failed for a reason worth reporting, and replacing
         // that reason with "cleanup failed" would hide it.
-        let _ = host.remove_entry_files(account, &id);
+        let _ = host.remove_entry_files(&managed, &id);
 
         return Err(refusal);
     }
@@ -173,7 +179,7 @@ pub fn create_cron_entry(
 /// no command there to be the same as this one.
 fn is_duplicate(
     host: &dyn CronHost,
-    account: &AccountName,
+    account: &ManagedAccount,
     document: &CrontabDocument,
     schedule: &CronSchedule,
     command: &CronCommand,

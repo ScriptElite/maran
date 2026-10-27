@@ -433,3 +433,71 @@ fn the_hosting_accounts_identity_is_read_again_immediately_before_useradd() {
         "the login must really have been created: a refusal that refuses everything proves nothing"
     );
 }
+
+/// Asserts that a refused creation built and ran nothing at all.
+fn assert_nothing_was_built(host: &FakeSftpHost) {
+    assert!(
+        host.spawns().is_empty()
+            && host.users().is_empty()
+            && host.directories().is_empty()
+            && host.configs().is_empty(),
+        "no useradd, no chpasswd, no jail and no unit may exist for an unmanaged account: {:?}",
+        host.spawns()
+    );
+}
+
+/// A request for `name`'s `web` login.
+fn request_of(name: &str) -> SftpUserRequest {
+    let account = AccountName::parse(name).expect("the fixture name is valid");
+
+    SftpUserRequest {
+        user: SftpUserName::for_account(&account, "web").expect("the fixture login is valid"),
+        account,
+        password: Password::parse(TEST_PASSWORD).expect("the fixture password is valid"),
+    }
+}
+
+#[test]
+fn creating_an_sftp_user_for_a_reserved_account_name_runs_no_useradd() {
+    let host = FakeSftpHost::new();
+
+    let error =
+        create_sftp_user_under_lock(&host, distro(), &request_of("nginx")).expect_err("must fail");
+
+    assert!(
+        matches!(error, SftpError::AccountNotManaged),
+        "got {error:?}"
+    );
+    assert_nothing_was_built(&host);
+}
+
+#[test]
+fn creating_an_sftp_user_for_an_account_with_a_system_identity_runs_no_useradd() {
+    // A hand-made user, uid below the floor, whose name is off the list.
+    let host = FakeSftpHost::new().with_account_ids(100, 100);
+
+    let error = create_sftp_user_under_lock(&host, distro(), &request_of("handmade"))
+        .expect_err("must fail");
+
+    assert!(
+        matches!(error, SftpError::AccountNotManaged),
+        "got {error:?}"
+    );
+    assert_nothing_was_built(&host);
+}
+
+#[test]
+fn creating_an_sftp_user_for_an_account_with_another_home_runs_no_useradd() {
+    // The login would share the uid of an operator's own user and give its
+    // holder a jail over that user's files.
+    let host = FakeSftpHost::new().with_account_home("/srv/handmade");
+
+    let error = create_sftp_user_under_lock(&host, distro(), &request_of("handmade"))
+        .expect_err("must fail");
+
+    assert!(
+        matches!(error, SftpError::AccountNotManaged),
+        "got {error:?}"
+    );
+    assert_nothing_was_built(&host);
+}

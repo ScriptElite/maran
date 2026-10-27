@@ -1,5 +1,7 @@
 //! Failures of the FTPS daemon operations.
 
+use maran_agent_core::validation::system::managed_account_error::ManagedAccountError;
+
 /// The `code` reported when a program could not be started at all.
 ///
 /// Negative so it can never collide with an exit status, every one of which is
@@ -207,6 +209,18 @@ pub enum FtpsError {
     /// never from an exit status.
     #[error("the ftps login's suspension could not be restored after the password was set")]
     SuspensionNotRestored,
+
+    /// The name is not a hosting account this panel may act on: it is reserved,
+    /// has a system identity, or does not have the managed home.
+    ///
+    /// Raised before any jail, login or password is touched. A name with no row
+    /// in the local password database at all is [`Self::AccountMissing`]
+    /// instead. Deliberately one variant for the three refusals, and without the
+    /// reason: naming which check failed would describe the rules to whoever is
+    /// probing them. The reason is carried only by the wrapped value of the
+    /// type that decided; this variant drops it.
+    #[error("the account is not a hosting account")]
+    AccountNotManaged,
 }
 
 /// `useradd`'s status for a name that is already taken.
@@ -250,5 +264,19 @@ impl FtpsError {
         }
 
         Self::SpawnFailed { code: status }
+    }
+
+    /// Maps the refusal of a managed-account resolution onto this area's list.
+    ///
+    /// An absent row is [`Self::AccountMissing`], the answer the area always
+    /// gave for an account the host does not hold; every other refusal
+    /// (reserved, system identity, wrong home) is [`Self::AccountNotManaged`].
+    /// `ManagedAccountError` is `#[non_exhaustive]`, so a refusal added later
+    /// lands on the stricter answer.
+    pub(crate) fn from_managed_account(error: ManagedAccountError) -> Self {
+        match error {
+            ManagedAccountError::NotFound => Self::AccountMissing,
+            _ => Self::AccountNotManaged,
+        }
     }
 }

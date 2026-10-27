@@ -149,6 +149,10 @@ const LOCK: &str = "--lock";
 ///
 /// - [`SftpError::AccountBusy`] when another operation for the hosting account
 ///   is already running. Nothing was read and nothing was written.
+/// - [`SftpError::AccountNotManaged`] and [`SftpError::AccountMissing`] when
+///   `account` is not a hosting account this panel may act on (reserved, a
+///   system identity, the wrong home, or no local row). Checked before the jail
+///   is read, the login is looked up or anything is written.
 /// - [`SftpError::PasswordRejected`] when `chpasswd` refuses the line — the
 ///   login exists and its password is unchanged.
 /// - [`SftpError::NotFound`] when the host holds no login of that name, and
@@ -172,8 +176,14 @@ pub fn set_sftp_password(
     // including every error path and a panic.
     let _guard = take_account_lock(account).ok_or(SftpError::AccountBusy)?;
 
-    let jail = AccountJail::for_account(account, distro.systemd_unit_directory());
-    let logins = host.account_logins(distro.passwd_database(), account, jail.directory())?;
+    // The gate comes before the jail is read or anything is written: the
+    // login this changes is a copy of the account's identity, and `chpasswd`
+    // on a login whose account is a system user or an operator's own login is
+    // the escalation this check exists to refuse.
+    let managed = host.managed_account(distro.passwd_database(), account)?;
+
+    let jail = AccountJail::for_account(managed.name(), distro.systemd_unit_directory());
+    let logins = host.account_logins(distro.passwd_database(), managed.name(), jail.directory())?;
     if !logins.iter().any(|held| held.as_str() == user.as_str()) {
         return Err(SftpError::NotFound);
     }

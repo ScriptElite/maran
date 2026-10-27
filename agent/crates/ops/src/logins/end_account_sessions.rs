@@ -1,10 +1,8 @@
 //! Ending the transfer sessions a suspended account already has open.
 
-use maran_agent_core::agent_paths::AgentPaths;
-use maran_agent_core::validation::system::name::AccountName;
+use maran_agent_core::validation::system::managed_account::ManagedAccount;
 use maran_distro::DistroAdapter;
 
-use crate::logins::account_passwd_row::account_passwd_row;
 use crate::logins::logins_error::LoginsError;
 use crate::logins::logins_host::LoginsHost;
 
@@ -49,9 +47,6 @@ const SIGNALLED: i32 = 0;
 /// do" as an error would fail every suspension of an idle customer.
 const NOTHING_MATCHED: i32 = 1;
 
-/// The uid no cull may ever name.
-const ROOT_UID: u32 = 0;
-
 /// Sends a fatal signal to every process running as `account`'s uid, and answers
 /// with how many there were.
 ///
@@ -72,28 +67,19 @@ const ROOT_UID: u32 = 0;
 /// `pkill --uid <n>` matches on the real uid, so the kernel — not this code —
 /// is what keeps a process that is not running as `<n>` out of the candidate
 /// set. The whole question is therefore where `<n>` comes from, and it comes
-/// from exactly one place: [`account_passwd_row`], the row whose name EQUALS the
+/// from exactly one place: the [`ManagedAccount`] the caller hands in, which
+/// the managed-account type built from the password row whose name EQUALS the
 /// validated account name. No name is parsed to derive it and nothing from the
 /// request reaches the argv.
 ///
-/// Two guards stand in front of that uid, and they are two rather than one:
-///
-/// - **uid 0 is refused.** The account-name grammar accepts `root`, `mail`,
-///   `news` and `daemon`, so a panel record naming an account that resolves to
-///   uid 0 would otherwise have this operation kill `systemd`, `sshd`, the
-///   database and the panel.
-/// - **the row's home must be `<ACCOUNT_HOME_ROOT>/<account>`.** That home is
-///   what this agent itself creates for a hosting account, so a row without it
-///   is not an account this agent provisioned — which is what refuses `mail` at
-///   uid 8 on a host where that system user existed before the panel did.
-///
-/// They are not a masking pair. On an ordinary host root's home is `/root`, so
-/// the home guard refuses uid 0 as well; but a host whose root home had been
-/// moved under the account home root is refused by the uid guard ALONE, and a
-/// system user at a low uid with a home elsewhere is refused by the home guard
-/// ALONE. Each is mutated separately and each dies to its own test by name
-/// (rules/testing.md: two checks that mask each other are one check and one
-/// piece of decoration).
+/// This function keeps no copy of the rules that decide which accounts are
+/// managed. The type refuses a reserved name, an id below the distro's floor
+/// (which includes uid 0) and a home other than the one this agent gives a
+/// hosting account, so an operator's own login (`ubuntu`, a human administrator)
+/// and every system user are refused before this function can be called with
+/// them. A second private copy of those rules here was the defect: it refused
+/// uid 0 and a foreign home and nothing else, so it culled an ordinary login
+/// whose home happened to be `/home/<name>`.
 ///
 /// # What it cannot become
 ///
@@ -135,12 +121,6 @@ const ROOT_UID: u32 = 0;
 ///
 /// # Errors
 ///
-/// - [`LoginsError::AccountMissing`] when the password database cannot be read,
-///   or holds no row for the account. Nothing was signalled.
-/// - [`LoginsError::SessionCullRefusedUid`] when that row's uid is 0. Nothing
-///   was signalled, and nothing ever will be for that name.
-/// - [`LoginsError::SessionCullRefusedHome`] when that row's home is not the one
-///   this agent gives a hosting account. Nothing was signalled.
 /// - [`LoginsError::SpawnFailed`] when `pkill` could not be started at all.
 /// - [`LoginsError::SessionCullFailed`] when `pkill` answered with anything but
 ///   "signalled" or "nothing matched". Some of the account's processes may have
@@ -149,21 +129,9 @@ const ROOT_UID: u32 = 0;
 pub(crate) fn end_account_sessions(
     host: &dyn LoginsHost,
     distro: &dyn DistroAdapter,
-    account: &AccountName,
+    account: &ManagedAccount,
 ) -> Result<u32, LoginsError> {
-    let rows = host.read_passwd(distro.passwd_database())?;
-    let row = account_passwd_row(&rows, account)?;
-
-    if row.uid == ROOT_UID {
-        return Err(LoginsError::SessionCullRefusedUid);
-    }
-
-    let expected_home = format!("{}/{}", AgentPaths::ACCOUNT_HOME_ROOT, account.as_str());
-    if row.home != expected_home {
-        return Err(LoginsError::SessionCullRefusedHome);
-    }
-
-    let uid = row.uid.to_string();
+    let uid = account.uid().to_string();
     let outcome = host.run(
         distro.pkill_binary(),
         &[SIGNAL_FLAG, KILL_SIGNAL, COUNT_FLAG, UID_FLAG, &uid],

@@ -130,6 +130,8 @@ const NON_UNIQUE: &str = "--non-unique";
 ///
 /// - [`FtpsError::AccountBusy`] when another operation for the hosting account
 ///   is already running. Nothing was created.
+/// - [`FtpsError::AccountNotManaged`] when the hosting account is reserved, a
+///   system identity or has the wrong home. Checked first: nothing is created.
 /// - [`FtpsError::AccountMissing`] when the hosting account is not on this host.
 ///   Checked first, before anything is created.
 /// - [`FtpsError::JailFailed`] when the jail's directories cannot be created, or
@@ -177,6 +179,13 @@ pub(crate) fn create_ftps_user_under_lock(
     distro: &dyn DistroAdapter,
     request: &FtpsUserRequest,
 ) -> Result<(), FtpsError> {
+    // The gate, before any host fact is read or anything is built: the login
+    // is created with the account's own uid and gid, so an account that is a
+    // system user, an operator's own login or a reserved name must be refused
+    // here and not discovered by what `useradd` does with it. The proof is not
+    // kept; the identity re-read below is what guards the window after it.
+    host.managed_account(distro.passwd_database(), &request.account)?;
+
     let ownership = host.account_ownership(&request.account)?;
 
     let jail = FtpsJail::for_account(&request.account, distro.systemd_unit_directory());

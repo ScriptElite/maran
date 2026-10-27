@@ -29,6 +29,9 @@ pub fn to_agent_error(error: &SftpError) -> AgentError {
         // variant in `ops`, because it sends an operator somewhere else: one
         // means the login is gone, the other that the account was never made.
         SftpError::NotFound | SftpError::AccountMissing => ErrorCode::NotFound,
+        // The name is not a managed hosting account (reserved, system identity or
+        // wrong home). A request fault with a fixed sentence that names no rule.
+        SftpError::AccountNotManaged => ErrorCode::InvalidInput,
         // The one failure that leaves a login the customer cannot use: the
         // account exists and the password it was to be reached with was not
         // set. VALIDATION_FAILED rather than SYSTEM_FAILURE because that is
