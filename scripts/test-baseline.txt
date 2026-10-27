@@ -1,6 +1,10 @@
 # Committed per-target test baseline. Recorded by 'maran test --accept'; commit the diff.
 # stack<TAB>target<TAB>passed<TAB>failed<TAB>ignored
 #
+# RE-MEASURED 2026-10-27 (issue #86, published and weak keys refused outside Development and Testing, rebased on dev
+# with #85): backend projects measured one by one with -m:1 (the whole-solution run is OOM-killed here):
+# SharedKernel 168->187 and Host.Tests 281->323 (the key policy and the host's refusal); ArchitectureTests 80
+# unchanged. No rust change on this branch. Host.IntegrationTests not measured here; CI measures it.
 # RE-MEASURED 2026-10-27 (issue #85, duplicate host names and the create-site race, rebased on dev with #87 and #88):
 # rust 30 targets 2205 passed / 0 failed / 141 ignored. maran_agent 347->351, handshake 7->8, maran_ops 1322->1347,
 # sites_on_a_real_host ignored 26->34. Backend measured one by one with -m:1: Sites 176->188; Agent.Client 371,
@@ -285,7 +289,7 @@ rust	doc-tests maran_distro	0	0	0
 rust	doc-tests maran_ops	0	0	0
 rust	doc-tests maran_templates	0	0	0
 backend	Maran.Agent.Client.Tests.dll	371	0	0
-backend	Maran.SharedKernel.Tests.dll	168	0	0
+backend	Maran.SharedKernel.Tests.dll	187	0	0
 backend	Maran.Modules.Identity.Tests.dll	275	0	0
 backend	Maran.Modules.Sftp.Tests.dll	80	0	0
 backend	Maran.Modules.Notifications.Tests.dll	48	0	0
@@ -302,7 +306,7 @@ backend	Maran.Modules.Ssl.Tests.dll	159	0	0
 backend	Maran.Sdk.Tests.dll	208	0	0
 backend	Maran.Modules.Sites.Tests.dll	188	0	0
 backend	Maran.ArchitectureTests.dll	80	0	0
-backend	Maran.Host.Tests.dll	281	0	0
+backend	Maran.Host.Tests.dll	323	0	0
 backend	Maran.Host.IntegrationTests.dll	415	0	0
 spa	accounts/delete.spec.ts	6	0	0
 spa	accounts/detail.spec.ts	10	0	0
