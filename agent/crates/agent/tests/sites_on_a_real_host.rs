@@ -1526,6 +1526,19 @@ impl SiteHost for RacingSiteHost {
         self.inner.write_config(target, contents, validator, reload)
     }
 
+    fn create_config(
+        &self,
+        target: &Path,
+        contents: &str,
+        validator: &maran_ops::safe_write::model::Validator<'_>,
+        reload: &maran_ops::safe_write::model::Reload<'_>,
+        refused_warnings: &[String],
+    ) -> Result<(), SitesOpError> {
+        (self.before_write)();
+        self.inner
+            .create_config(target, contents, validator, reload, refused_warnings)
+    }
+
     fn remove_config(
         &self,
         target: &Path,
@@ -2441,4 +2454,539 @@ fn a_site_suspended_before_the_upgrade_stays_suspended_through_a_certificate_ins
     );
 
     maran_ops::ssl::purge_certificate(&ssl_host, polygon_distro(), &domain);
+}
+
+// ---------------------------------------------------------------------------
+// Host names another vhost already serves (issue #85).
+//
+// `nginx -t` answers a host name two server blocks share with a warning and
+// exit status 0, and then serves the name from whichever file the include glob
+// sorts first. Only a real nginx can say whether the creation protocol turns
+// that warning into a refusal, and whether the refused vhost is gone again.
+// ---------------------------------------------------------------------------
+
+/// The words nginx prints for a host name two server blocks share.
+///
+/// Spelled again here, as [`VALIDATE_ARGUMENT`] is: the production constant is
+/// `pub(crate)`, and a test that took its expectation from the code under test
+/// would pass if that code stopped matching what nginx says.
+const NGINX_CONFLICT_WORDS: &str = "conflicting server name";
+
+/// The page the first owner of a contested host name serves.
+const OWNER_BODY: &str = "maran-hostname-owner";
+
+/// Parses a host name the test wrote by hand.
+///
+/// # Panics
+///
+/// Panics when `text` is not a valid domain, which is a defect of the test.
+fn host_name(text: &str) -> Domain {
+    Domain::parse(text).expect("a valid domain")
+}
+
+/// A static site owned by `account` at `domain`, also serving `aliases`.
+///
+/// Static for the reason [`static_site`] is: the config-write protocol is
+/// entered once, and no pool or php-fpm reload is mixed into the answer.
+fn site_with_aliases(
+    account: &PolygonAccount,
+    domain: &Domain,
+    aliases: &[&str],
+) -> CreateSiteInput {
+    CreateSiteInput {
+        aliases: aliases.iter().map(|alias| host_name(alias)).collect(),
+        ..static_site(account, domain)
+    }
+}
+
+/// Creates a site that must succeed and makes its vhost go away with the test.
+///
+/// # Panics
+///
+/// Panics when the creation is refused.
+fn create_guarded_site(
+    input: &CreateSiteInput,
+) -> (maran_ops::sites::CreatedSite, PolygonConfigFile) {
+    let created = create_polygon_site(&ProcessSiteHost::new(), input).unwrap_or_else(|error| {
+        panic!(
+            "creating {} must succeed in the polygon: {error}",
+            input.domain.as_str()
+        )
+    });
+    let guard = PolygonConfigFile::at(&created.config_path);
+    (created, guard)
+}
+
+/// Fails the test unless `result` is the refusal for a host name already
+/// served, and returns the detail it carried.
+///
+/// # Panics
+///
+/// Panics with `what` and the actual result when it is anything else.
+fn taken_detail(result: Result<maran_ops::sites::CreatedSite, SitesOpError>, what: &str) -> String {
+    match result {
+        Err(SitesOpError::ServerNameTaken { detail, .. }) => detail,
+        other => panic!("{what}: expected ServerNameTaken, got {other:?}"),
+    }
+}
+
+/// Runs the real `nginx -t`, requires it to succeed, and returns what it wrote
+/// to standard error — where nginx puts its warnings.
+///
+/// # Panics
+///
+/// Panics when nginx cannot be run or rejects the tree.
+fn nginx_t_stderr() -> String {
+    let output = std::process::Command::new(polygon_distro().nginx_binary())
+        .arg(VALIDATE_ARGUMENT)
+        .output()
+        .expect("the polygon image installs nginx");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        output.status.success(),
+        "nginx -t must accept the tree:\n{stderr}"
+    );
+    stderr
+}
+
+/// Fails the test when `stderr` carries nginx's conflict warning about `name`,
+/// bare or with a leading dot.
+///
+/// Named and not general on purpose: the polygon's tree is shared by every
+/// test in the file, and another test may have planted a conflict of its own on
+/// purpose.
+///
+/// # Panics
+///
+/// Panics when the warning about `name` is present.
+fn assert_no_warning_about(stderr: &str, name: &str) {
+    for quoted in [format!("\"{name}\""), format!("\".{name}\"")] {
+        assert!(
+            !stderr.contains(&format!("{NGINX_CONFLICT_WORDS} {quoted}")),
+            "nginx must not warn that {name} is served twice:\n{stderr}"
+        );
+    }
+}
+
+/// Writes a vhost file the way an operator would, beside the agent's own, and
+/// makes it go away with the test.
+///
+/// It listens where the agent's vhosts listen, so a name it shares with one of
+/// them is a conflict on a real address. Written as root: it stands for a file
+/// the agent did not make and does not own.
+///
+/// # Panics
+///
+/// Panics when the file cannot be written.
+fn plant_operator_vhost(file_name: &str, server_names: &str) -> PolygonConfigFile {
+    let path = Path::new(AgentPaths::NGINX_INCLUDE_DIRECTORY).join(file_name);
+    std::fs::write(
+        &path,
+        format!(
+            "server {{\n    listen 80;\n    listen [::]:80;\n    server_name {server_names};\n    return 204;\n}}\n"
+        ),
+    )
+    .expect("an operator's vhost can be written in the polygon");
+    PolygonConfigFile::at(path)
+}
+
+/// How many `server_name` lines of nginx's own dump of the loaded
+/// configuration list `host`.
+///
+/// Asked of `nginx -T`, the server's own answer to "what do you read", so a
+/// file nginx loads is counted whatever it is called and wherever it sits.
+///
+/// # Panics
+///
+/// Panics when nginx cannot be run or rejects the tree.
+fn server_blocks_naming(host: &str) -> usize {
+    let output = std::process::Command::new(polygon_distro().nginx_binary())
+        .arg("-T")
+        .output()
+        .expect("the polygon image installs nginx");
+    assert!(
+        output.status.success(),
+        "nginx -T must succeed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| {
+            line.trim()
+                .strip_prefix("server_name ")
+                .is_some_and(|names| {
+                    names
+                        .trim_end_matches(';')
+                        .split_whitespace()
+                        .any(|name| name == host)
+                })
+        })
+        .count()
+}
+
+/// What two creations that were lined up inside the protocol answered.
+struct Race {
+    /// What the first creation answered.
+    first: Result<maran_ops::sites::CreatedSite, SitesOpError>,
+    /// What the second creation answered.
+    second: Result<maran_ops::sites::CreatedSite, SitesOpError>,
+    /// Whether each creation really waited for the other to arrive.
+    overlapped: bool,
+}
+
+/// Runs two creations on two threads against the one real nginx, each held
+/// just before it enters the config-write protocol until the other has
+/// arrived there too.
+///
+/// Symmetric on purpose. The hook runs after everything a creation does by
+/// itself, the existence check included, so both creations have already been
+/// told "no vhost for my domain yet" when they meet; which of them takes the
+/// config-tree lock first is left to the scheduler, and the assertions are
+/// written for either order.
+fn race_two_creations(first: CreateSiteInput, second: CreateSiteInput) -> Race {
+    let (to_second, second_hears) = mpsc::channel::<()>();
+    let (to_first, first_hears) = mpsc::channel::<()>();
+    let arrivals = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let spawn =
+        |input: CreateSiteInput, tell_other: mpsc::Sender<()>, hear_other: mpsc::Receiver<()>| {
+            let arrivals = std::sync::Arc::clone(&arrivals);
+            std::thread::spawn(move || {
+                // Behind a mutex only because the hook is a `Fn` shared across
+                // threads by its type; one thread ever calls it.
+                let hear_other = std::sync::Mutex::new(hear_other);
+                let host = RacingSiteHost {
+                    inner: ProcessSiteHost::new(),
+                    before_write: Box::new(move || {
+                        let _ = tell_other.send(());
+                        let heard = hear_other
+                            .lock()
+                            .expect("the fixture lock is never poisoned")
+                            .recv_timeout(RACE_BUDGET)
+                            .is_ok();
+                        if heard {
+                            arrivals.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    }),
+                };
+                create_racing_site(&host, &input)
+            })
+        };
+
+    let first_thread = spawn(first, to_second, first_hears);
+    let second_thread = spawn(second, to_first, second_hears);
+
+    Race {
+        first: first_thread.join().expect("the first creation must finish"),
+        second: second_thread
+            .join()
+            .expect("the second creation must finish"),
+        overlapped: arrivals.load(std::sync::atomic::Ordering::SeqCst) == 2,
+    }
+}
+
+#[test]
+#[ignore = "writes real vhosts and runs the real nginx -t over both: polygon only"]
+fn a_site_naming_a_host_another_vhost_serves_is_refused_by_the_real_nginx_and_leaves_the_tree_as_it_was()
+ {
+    PolygonAccount::require_polygon();
+    ensure_nginx_is_running();
+    let owner = PolygonAccount::create("polyhnownera");
+    let newcomer = PolygonAccount::create("polyhnnewcma");
+    let shop = host_name("shop.hn1.test");
+    // `aaa` sorts before `shop`: the newcomer's file is the one nginx reads
+    // FIRST, so without the refusal the name would move to the newcomer.
+    let newcomer_domain = host_name("aaa.hn1.test");
+
+    let (owned, _owned_vhost) = create_guarded_site(&site_with_aliases(&owner, &shop, &[]));
+    write_as_account(&owner, "sites/shop.hn1.test/index.html", OWNER_BODY);
+    let owned_before = std::fs::read_to_string(&owned.config_path).expect("the owner's vhost");
+
+    let refused_vhost = SitePaths::for_site(newcomer.name(), &newcomer_domain).config_path;
+    let refusal = create_polygon_site(
+        &ProcessSiteHost::new(),
+        &site_with_aliases(&newcomer, &newcomer_domain, &["shop.hn1.test"]),
+    );
+
+    let detail = taken_detail(refusal, "the real nginx warned about an alias");
+    assert!(
+        detail.contains("conflicting server name \"shop.hn1.test\""),
+        "the refusal must carry nginx's own words about the host, got {detail:?}"
+    );
+    assert!(
+        !refused_vhost.exists(),
+        "a refused site must leave no vhost behind at {refused_vhost:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&owned.config_path).expect("the owner's vhost"),
+        owned_before,
+        "the owner's vhost must be untouched"
+    );
+    assert_no_warning_about(&nginx_t_stderr(), "shop.hn1.test");
+    assert_nginx_loads(Path::new(&owned.config_path));
+    let response = fetch_until("shop.hn1.test", "/", |body| body.contains(OWNER_BODY));
+    assert!(
+        response.contains(OWNER_BODY),
+        "the host name must still be answered by its owner:\n{response}"
+    );
+}
+
+#[test]
+#[ignore = "writes real vhosts and runs the real nginx -t over both: polygon only"]
+fn a_site_whose_domain_another_vhost_already_serves_as_an_alias_is_refused() {
+    PolygonAccount::require_polygon();
+    ensure_nginx_is_running();
+    let owner = PolygonAccount::create("polyhnownerb");
+    let newcomer = PolygonAccount::create("polyhnnewcmb");
+    // The owner's file sorts first and the newcomer's last — the reverse of the
+    // order above — and the contested name is the owner's ALIAS and the
+    // newcomer's DOMAIN.
+    let owner_domain = host_name("aaa.hn2.test");
+    let contested = host_name("zzz.hn2.test");
+
+    let (owned, _owned_vhost) =
+        create_guarded_site(&site_with_aliases(&owner, &owner_domain, &["zzz.hn2.test"]));
+    let owned_before = std::fs::read_to_string(&owned.config_path).expect("the owner's vhost");
+
+    let refused_vhost = SitePaths::for_site(newcomer.name(), &contested).config_path;
+    let refusal = create_polygon_site(
+        &ProcessSiteHost::new(),
+        &site_with_aliases(&newcomer, &contested, &[]),
+    );
+
+    let detail = taken_detail(refusal, "the real nginx warned about the domain");
+    assert!(
+        detail.contains("conflicting server name \"zzz.hn2.test\""),
+        "the refusal must carry nginx's own words about the host, got {detail:?}"
+    );
+    assert!(
+        !refused_vhost.exists(),
+        "a refused site must leave no vhost behind at {refused_vhost:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&owned.config_path).expect("the owner's vhost"),
+        owned_before,
+        "the owner's vhost must be untouched"
+    );
+    assert_no_warning_about(&nginx_t_stderr(), "zzz.hn2.test");
+    assert_nginx_loads(Path::new(&owned.config_path));
+}
+
+#[test]
+#[ignore = "plants a real operator vhost and runs the real nginx -t: polygon only"]
+fn a_name_another_file_serves_with_a_leading_dot_after_this_one_is_refused() {
+    PolygonAccount::require_polygon();
+    ensure_nginx_is_running();
+    let account = PolygonAccount::create("polyhndotlate");
+    let domain = host_name("dot.hn3.test");
+    // `.dot.hn3.test` is `dot.hn3.test` and every subdomain of it. The file
+    // sorts AFTER the agent's, so nginx reads this site's name first and
+    // quotes the later key, WITH its dot, in the warning.
+    let _operator = plant_operator_vhost("zzzz-wild-hn3.conf", ".dot.hn3.test");
+    assert_valid_nginx_tree("the tree with the operator's wildcard file alone");
+
+    let vhost = SitePaths::for_site(account.name(), &domain).config_path;
+    let refusal = create_polygon_site(
+        &ProcessSiteHost::new(),
+        &site_with_aliases(&account, &domain, &[]),
+    );
+
+    let detail = taken_detail(refusal, "the operator's wildcard file serves the name");
+    assert!(
+        detail.contains("conflicting server name \".dot.hn3.test\""),
+        "the refusal must carry nginx's own words, dot included, got {detail:?}"
+    );
+    assert!(!vhost.exists(), "a refused site must leave no vhost behind");
+    assert_no_warning_about(&nginx_t_stderr(), "dot.hn3.test");
+}
+
+#[test]
+#[ignore = "plants a real operator vhost and runs the real nginx -t: polygon only"]
+fn a_name_another_file_serves_with_a_leading_dot_before_this_one_is_refused() {
+    PolygonAccount::require_polygon();
+    ensure_nginx_is_running();
+    let account = PolygonAccount::create("polyhndotearl");
+    let domain = host_name("dot.hn3b.test");
+    // The file sorts BEFORE the agent's, so nginx reads the wildcard first and
+    // the warning quotes this site's own name, bare.
+    let _operator = plant_operator_vhost("aaaa-wild-hn3b.conf", ".dot.hn3b.test");
+    assert_valid_nginx_tree("the tree with the operator's wildcard file alone");
+
+    let vhost = SitePaths::for_site(account.name(), &domain).config_path;
+    let refusal = create_polygon_site(
+        &ProcessSiteHost::new(),
+        &site_with_aliases(&account, &domain, &[]),
+    );
+
+    let detail = taken_detail(refusal, "the operator's wildcard file serves the name");
+    assert!(
+        detail.contains("conflicting server name \"dot.hn3b.test\""),
+        "the refusal must carry nginx's own words about the host, got {detail:?}"
+    );
+    assert!(!vhost.exists(), "a refused site must leave no vhost behind");
+    assert_no_warning_about(&nginx_t_stderr(), "dot.hn3b.test");
+}
+
+#[test]
+#[ignore = "writes real vhosts and runs the real nginx -t over both: polygon only"]
+fn a_site_whose_names_collide_with_nothing_is_created_beside_an_existing_one() {
+    // The inverse control of the refusals above: a check that refused every
+    // creation beside another vhost would pass all of them.
+    PolygonAccount::require_polygon();
+    ensure_nginx_is_running();
+    let owner = PolygonAccount::create("polyhnownerd");
+    let neighbour = PolygonAccount::create("polyhnnewcmd");
+    let shop = host_name("shop.hn4.test");
+    let other = host_name("other.hn4.test");
+
+    let (owned, _owned_vhost) = create_guarded_site(&site_with_aliases(&owner, &shop, &[]));
+    // One alias is `shop.hn4.test` with more on the end: a different host that a
+    // loose match on the bare text would confuse with the owner's.
+    let (created, _created_vhost) = create_guarded_site(&site_with_aliases(
+        &neighbour,
+        &other,
+        &["www.other.hn4.test", "shop.hn4.test.example"],
+    ));
+
+    assert!(Path::new(&created.config_path).exists());
+    assert!(Path::new(&owned.config_path).exists());
+    let stderr = nginx_t_stderr();
+    assert_no_warning_about(&stderr, "shop.hn4.test");
+    assert_no_warning_about(&stderr, "other.hn4.test");
+    assert_nginx_loads(Path::new(&owned.config_path));
+    assert_nginx_loads(Path::new(&created.config_path));
+}
+
+#[test]
+#[ignore = "plants two real operator vhosts and runs the real nginx -t: polygon only"]
+fn a_conflict_between_two_other_files_does_not_block_an_unrelated_site() {
+    // One bad file of someone else's must not turn into a host on which no
+    // site can be created: only the creating site's own names refuse.
+    PolygonAccount::require_polygon();
+    ensure_nginx_is_running();
+    let account = PolygonAccount::create("polyhnunrelat");
+    let _first = plant_operator_vhost("zzzz-a-hn5.conf", "other.hn5.test");
+    let _second = plant_operator_vhost("zzzz-b-hn5.conf", "other.hn5.test");
+    // The positive control: the conflict really is in the tree, and `nginx -t`
+    // really does say so while exiting 0. Without this the test would pass on a
+    // host where the planted files conflicted with nothing.
+    assert!(
+        nginx_t_stderr().contains(&format!("{NGINX_CONFLICT_WORDS} \"other.hn5.test\"")),
+        "the two planted files must conflict in the real nginx"
+    );
+
+    let (created, _vhost) = create_guarded_site(&site_with_aliases(
+        &account,
+        &host_name("unrelated.hn5.test"),
+        &[],
+    ));
+
+    assert_nginx_loads(Path::new(&created.config_path));
+}
+
+#[test]
+#[ignore = "runs two real vhost writes against one real nginx at the same time: polygon only"]
+fn two_creations_racing_for_one_host_name_leave_exactly_one_vhost_answering_for_it() {
+    PolygonAccount::require_polygon();
+    ensure_nginx_is_running();
+    let first = PolygonAccount::create("polyhnracea");
+    let second = PolygonAccount::create("polyhnraceb");
+    // Different domains, so each creation's existence check passes and only the
+    // shared alias can stop the second; `zero` and `shop` sort in either order
+    // depending on which thread is the winner.
+    let first_domain = host_name("shop.hn6.test");
+    let second_domain = host_name("zero.hn6.test");
+    let first_vhost = SitePaths::for_site(first.name(), &first_domain).config_path;
+    let second_vhost = SitePaths::for_site(second.name(), &second_domain).config_path;
+    let _first_guard = PolygonConfigFile::at(&first_vhost);
+    let _second_guard = PolygonConfigFile::at(&second_vhost);
+
+    let race = race_two_creations(
+        site_with_aliases(&first, &first_domain, &[]),
+        site_with_aliases(&second, &second_domain, &["shop.hn6.test"]),
+    );
+
+    // The positive control: both creations really stood at the protocol's door
+    // together, with their existence checks already behind them.
+    assert!(
+        race.overlapped,
+        "each creation must have arrived at the protocol while the other was there"
+    );
+    let (winner, loser_vhost, loser) = match (race.first, race.second) {
+        (Ok(created), Err(error)) => (created, second_vhost, error),
+        (Err(error), Ok(created)) => (created, first_vhost, error),
+        (first, second) => {
+            panic!("exactly one creation must win, got {first:?} and {second:?}")
+        }
+    };
+    assert!(
+        matches!(loser, SitesOpError::ServerNameTaken { .. }),
+        "the loser must be told the name is taken, got {loser:?}"
+    );
+    assert!(
+        Path::new(&winner.config_path).exists(),
+        "the winner's vhost must be on disk"
+    );
+    assert!(
+        !loser_vhost.exists(),
+        "the loser must leave no vhost behind at {loser_vhost:?}"
+    );
+    assert_eq!(
+        server_blocks_naming("shop.hn6.test"),
+        1,
+        "exactly one vhost may answer for the contested name"
+    );
+    assert_no_warning_about(&nginx_t_stderr(), "shop.hn6.test");
+    assert_nginx_loads(Path::new(&winner.config_path));
+}
+
+#[test]
+#[ignore = "runs two real vhost writes against one real nginx at the same time: polygon only"]
+fn two_creations_of_the_same_domain_leave_one_vhost_and_never_overwrite_the_first() {
+    PolygonAccount::require_polygon();
+    ensure_nginx_is_running();
+    let first = PolygonAccount::create("polyhnsamea");
+    let second = PolygonAccount::create("polyhnsameb");
+    let domain = host_name("same.hn7.test");
+    let vhost = SitePaths::for_site(first.name(), &domain).config_path;
+    let _guard = PolygonConfigFile::at(&vhost);
+
+    // The same domain from two accounts: one file name, so both creations pass
+    // the existence check (neither file is there yet) and meet at the write.
+    let race = race_two_creations(
+        site_with_aliases(&first, &domain, &[]),
+        site_with_aliases(&second, &domain, &[]),
+    );
+
+    assert!(
+        race.overlapped,
+        "each creation must have arrived at the protocol while the other was there"
+    );
+    let (winner, winner_home, loser_home, loser) = match (race.first, race.second) {
+        (Ok(created), Err(error)) => (created, first.home(), second.home(), error),
+        (Err(error), Ok(created)) => (created, second.home(), first.home(), error),
+        (first, second) => {
+            panic!("exactly one creation must win, got {first:?} and {second:?}")
+        }
+    };
+    assert!(
+        matches!(loser, SitesOpError::ServerNameTaken { .. }),
+        "the loser must be told the name is taken, got {loser:?}"
+    );
+    let surviving = std::fs::read_to_string(&vhost).expect("the winner's vhost must be on disk");
+    assert!(
+        surviving.contains(&winner.document_root),
+        "the surviving vhost must be the winner's, got:\n{surviving}"
+    );
+    assert!(
+        !surviving.contains(&loser_home.display().to_string()),
+        "the loser's vhost must not have replaced the winner's, got:\n{surviving}"
+    );
+    assert!(
+        winner
+            .document_root
+            .starts_with(&winner_home.display().to_string())
+    );
+    assert_eq!(server_blocks_naming("same.hn7.test"), 1);
+    assert_nginx_loads(&vhost);
 }
