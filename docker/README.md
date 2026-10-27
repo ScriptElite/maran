@@ -302,14 +302,14 @@ docker run --rm \
 
 ## Running the Polygon Suites
 
-Thirteen test files are `#[ignore]`d by default and run only inside a polygon:
+Fourteen test files are `#[ignore]`d by default and run only inside a polygon:
 `sites_on_a_real_host.rs`, `php_pools_on_a_real_host.rs`,
 `privileges_on_a_real_host.rs`, `databases_on_a_real_host.rs`,
 `monitor_on_a_real_host.rs`, `binary_paths_on_a_real_host.rs`,
 `sftp_on_a_real_host.rs`, `account_deletion_on_a_real_host.rs`,
 `firewall_on_a_real_host.rs`, `cron_on_a_real_host.rs`,
-`backup_on_a_real_host.rs`, `restore_recovery_on_a_real_host.rs` and
-`ftps_on_a_real_host.rs`. They create real system accounts and real database
+`backup_on_a_real_host.rs`, `restore_recovery_on_a_real_host.rs`,
+`ftps_on_a_real_host.rs` and `account_identity_on_a_real_host.rs`. They create real system accounts and real database
 users, write real vhosts and pools, mount real filesystems, log in to a real
 sshd and drop real privileges, so they refuse to run unless the image's
 `MARAN_POLYGON` marker is set and the process is root — asked to run anywhere
@@ -376,7 +376,7 @@ PAM stack includes `pam_loginuid`:
 docker run --rm --privileged -v "$PWD:/maran" -w /maran/agent -e CARGO_TARGET_DIR=/tmp/target \
   maran-polygon-ubuntu24 \
   cargo test --test sftp_on_a_real_host --test ftps_on_a_real_host \
-    --test account_deletion_on_a_real_host \
+    --test account_deletion_on_a_real_host --test account_identity_on_a_real_host \
     --test backup_on_a_real_host \
     --test firewall_on_a_real_host --test cron_on_a_real_host \
     --no-fail-fast \

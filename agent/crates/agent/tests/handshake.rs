@@ -16,6 +16,8 @@ use tower::service_fn;
 
 use maran_agent::error::StartupError;
 use maran_agent::peercred::PeerPolicy;
+use maran_agent::proto::accounts_service_client::AccountsServiceClient;
+use maran_agent::proto::cron_service_client::CronServiceClient;
 use maran_agent::proto::db_service_client::DbServiceClient;
 use maran_agent::proto::files_service_client::FilesServiceClient;
 use maran_agent::proto::ftps_service_client::FtpsServiceClient;
@@ -25,14 +27,17 @@ use maran_agent::proto::sites_service_client::SitesServiceClient;
 use maran_agent::proto::ssl_service_client::SslServiceClient;
 use maran_agent::proto::system_service_client::SystemServiceClient;
 use maran_agent::proto::{
-    CreateDatabaseRequest, CreateDirectoryRequest, CreateFtpsUserRequest, CreateSftpUserRequest,
-    CreateSiteRequest, DeleteEntryRequest, DeleteFtpsUserRequest, EnableFtpsRequest,
-    EnableFtpsResponse, ErrorCode, GetAgentInfoRequest, GetFtpsStatusRequest,
-    InstallCertificateRequest, InstallPhpVersionRequest, ListDatabasesRequest,
-    ListPhpVersionsRequest, SetFtpsPasswordRequest, create_database_response,
-    create_ftps_user_response, create_sftp_user_response, delete_entry_response,
-    delete_ftps_user_response, enable_ftps_response, get_agent_info_response,
-    get_ftps_status_response, set_ftps_password_response,
+    CreateAccountRequest, CreateDatabaseRequest, CreateDirectoryRequest, CreateFtpsUserRequest,
+    CreateSftpUserRequest, CreateSiteRequest, DeleteEntryRequest, DeleteFtpsUserRequest,
+    EnableFtpsRequest, EnableFtpsResponse, ErrorCode, GetAccountSuspensionStateRequest,
+    GetAccountUsageRequest, GetAgentInfoRequest, GetCronEnvironmentRequest, GetFtpsStatusRequest,
+    InstallCertificateRequest, InstallPhpVersionRequest, ListCronEntriesRequest,
+    ListDatabasesRequest, ListPhpVersionsRequest, SetFtpsPasswordRequest, create_account_response,
+    create_database_response, create_ftps_user_response, create_sftp_user_response,
+    delete_entry_response, delete_ftps_user_response, enable_ftps_response,
+    get_account_suspension_state_response, get_account_usage_response, get_agent_info_response,
+    get_cron_environment_response, get_ftps_status_response, list_cron_entries_response,
+    set_ftps_password_response,
 };
 
 /// How long the test waits for the server to bind before declaring it stuck.
@@ -727,6 +732,195 @@ async fn the_enable_shape_the_panel_sends_passes_the_agents_input_boundary_and_a
         "UNOBSERVED HERE: the daemon. This test reaches the agent's input boundary and the \
          certificate probe behind it, never a running vsftpd and never the panel process."
     );
+
+    server.abort();
+}
+
+/// A reserved name that no machine this suite runs on carries as a user, so
+/// without the reserved list the agent would answer "no such account" for it.
+const RESERVED_NAME_NO_HOST_HOLDS: &str = "ec2_user";
+
+/// A well-formed, unreserved name that no machine this suite runs on carries.
+const UNRESERVED_NAME_NO_HOST_HOLDS: &str = "wirecheckacct";
+
+/// Whether the user database of this machine holds `user`.
+fn host_has_user(user: &str) -> bool {
+    std::process::Command::new("getent")
+        .args(["passwd", user])
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
+/// The error code of a `GetAccountUsage` answer, or a panic naming what came
+/// back instead.
+fn usage_code(response: maran_agent::proto::GetAccountUsageResponse) -> i32 {
+    match response.result {
+        Some(get_account_usage_response::Result::Error(error)) => error.code,
+        other => panic!("GetAccountUsage must answer with a typed refusal, got {other:?}"),
+    }
+}
+
+/// The error code of a `GetAccountSuspensionState` answer, or a panic.
+fn suspension_state_code(response: maran_agent::proto::GetAccountSuspensionStateResponse) -> i32 {
+    match response.result {
+        Some(get_account_suspension_state_response::Result::Error(error)) => error.code,
+        other => {
+            panic!("GetAccountSuspensionState must answer with a typed refusal, got {other:?}")
+        }
+    }
+}
+
+/// The error code of a `ListCronEntries` answer, or a panic.
+fn cron_list_code(response: maran_agent::proto::ListCronEntriesResponse) -> i32 {
+    match response.result {
+        Some(list_cron_entries_response::Result::Error(error)) => error.code,
+        other => panic!("ListCronEntries must answer with a typed refusal, got {other:?}"),
+    }
+}
+
+/// The error code of a `GetCronEnvironment` answer, or a panic.
+fn cron_environment_code(response: maran_agent::proto::GetCronEnvironmentResponse) -> i32 {
+    match response.result {
+        Some(get_cron_environment_response::Result::Error(error)) => error.code,
+        other => panic!("GetCronEnvironment must answer with a typed refusal, got {other:?}"),
+    }
+}
+
+/// The error code of a `CreateAccount` answer, or a panic.
+fn create_account_code(response: maran_agent::proto::CreateAccountResponse) -> i32 {
+    match response.result {
+        Some(create_account_response::Result::Error(error)) => error.code,
+        other => panic!("CreateAccount must answer with a typed refusal, got {other:?}"),
+    }
+}
+
+/// Blind spot, stated where it matters: this test returns early on an
+/// unsupported host, which would pass silently, and it sends only rpcs that READ
+/// (plus a `CreateAccount` for `root`, which stops at a refusal either way). A
+/// mutating rpc for a system user is deliberately NOT sent over a real host
+/// here, because with the guard removed it would change that user on whatever
+/// machine ran the test. Those are settled by the polygon suite
+/// `account_identity_on_a_real_host`.
+#[tokio::test]
+async fn a_reserved_account_name_is_refused_over_the_wire_before_any_tool_runs() {
+    let directory = tempfile::tempdir().unwrap();
+    let socket_path = directory.path().join("agent.sock");
+
+    let policy = PeerPolicy::new(maran_agent_core::utils::current_uid::current_uid().unwrap());
+    let server_path = socket_path.clone();
+    let mut server =
+        tokio::spawn(async move { maran_agent::server::serve(&server_path, policy).await });
+
+    match wait_until_listening(&socket_path, &mut server).await {
+        Started::Listening => {}
+        Started::UnsupportedHost(reason) => {
+            eprintln!("skipping the reserved account name test: {reason}");
+            return;
+        }
+    }
+
+    assert!(
+        !host_has_user(RESERVED_NAME_NO_HOST_HOLDS)
+            && !host_has_user(UNRESERVED_NAME_NO_HOST_HOLDS),
+        "this test needs a machine without a {RESERVED_NAME_NO_HOST_HOLDS} or \
+         {UNRESERVED_NAME_NO_HOST_HOLDS} user: with one, the control below proves nothing"
+    );
+
+    let channel = connect(&socket_path).await;
+    let mut accounts = AccountsServiceClient::new(channel.clone());
+    let mut cron = CronServiceClient::new(channel);
+    let invalid = ErrorCode::InvalidInput as i32;
+    let not_found = ErrorCode::NotFound as i32;
+
+    // `root` is refused by the list AND by the id floor AND by the home rule, so
+    // it proves the wiring but not the list; the second name, which only the
+    // list refuses, is what proves the list is asked on the shipped path.
+    let created = accounts
+        .create_account(CreateAccountRequest {
+            username: "root".to_owned(),
+            quota_bytes: 0,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        create_account_code(created),
+        invalid,
+        "creating `root` must be refused as a reserved name, not reported as already existing"
+    );
+
+    for reserved in ["root", RESERVED_NAME_NO_HOST_HOLDS] {
+        let usage = accounts
+            .get_account_usage(GetAccountUsageRequest {
+                username: reserved.to_owned(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(usage_code(usage), invalid, "usage of `{reserved}`");
+
+        let state = accounts
+            .get_account_suspension_state(GetAccountSuspensionStateRequest {
+                username: reserved.to_owned(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            suspension_state_code(state),
+            invalid,
+            "suspension state of `{reserved}`"
+        );
+
+        let listing = cron
+            .list_cron_entries(ListCronEntriesRequest {
+                account_username: reserved.to_owned(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            cron_list_code(listing),
+            invalid,
+            "cron listing of `{reserved}`"
+        );
+
+        let environment = cron
+            .get_cron_environment(GetCronEnvironmentRequest {
+                account_username: reserved.to_owned(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            cron_environment_code(environment),
+            invalid,
+            "cron environment of `{reserved}`"
+        );
+    }
+
+    // The inverse control: a well-formed, unreserved name the host does not hold
+    // is ABSENT, a different answer from a refusal, so the refusals above are
+    // not the agent saying no to everything.
+    let usage = accounts
+        .get_account_usage(GetAccountUsageRequest {
+            username: UNRESERVED_NAME_NO_HOST_HOLDS.to_owned(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(usage_code(usage), not_found);
+
+    let listing = cron
+        .list_cron_entries(ListCronEntriesRequest {
+            account_username: UNRESERVED_NAME_NO_HOST_HOLDS.to_owned(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(cron_list_code(listing), not_found);
 
     server.abort();
 }
