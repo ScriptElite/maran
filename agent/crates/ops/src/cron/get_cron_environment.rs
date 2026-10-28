@@ -28,6 +28,8 @@ use crate::cron::model::crontab_document::CrontabDocument;
 ///   may act on (reserved, absent, a system identity, or with the wrong home).
 ///   Checked first, before the crontab or the home is touched.
 /// - [`CronError::CrontabRefused`] when the crontab could not be read.
+/// - [`CronError::Bound`] when `crontab` outlived its deadline and was killed with its
+///   process group. Nothing was changed.
 pub fn get_cron_environment(
     host: &dyn CronHost,
     account: &AccountName,

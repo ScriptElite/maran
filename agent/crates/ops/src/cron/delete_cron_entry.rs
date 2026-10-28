@@ -39,6 +39,9 @@ use crate::cron::model::crontab_document::CrontabDocument;
 ///   id.
 /// - [`CronError::CrontabRefused`] when `crontab` refused the table. Nothing is
 ///   removed and the entry still runs.
+/// - [`CronError::Bound`] when `crontab` outlived its deadline and was killed with its
+///   process group. Not a refusal: the table may or may not have been replaced, so the
+///   caller reads it again before it believes either outcome.
 /// - [`CronError::EntryFileUnremovable`] when a file is there and cannot be
 ///   removed. The entry is already out of the crontab by then.
 /// - [`CronError::Privilege`] when the account cannot be resolved or the

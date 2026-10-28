@@ -51,6 +51,9 @@ use crate::cron::model::crontab_document::CrontabDocument;
 ///   id. Nothing is written.
 /// - [`CronError::CrontabRefused`] when `crontab` refused the table. The
 ///   command file is not touched.
+/// - [`CronError::Bound`] when `crontab` outlived its deadline and was killed with its
+///   process group. Not a refusal: the table may or may not have been replaced, so the
+///   caller reads it again before it believes either outcome.
 /// - [`CronError::EntryFileUnwritable`] when the command file could not be
 ///   written after the schedule was installed.
 /// - [`CronError::Privilege`] when the account cannot be resolved or the

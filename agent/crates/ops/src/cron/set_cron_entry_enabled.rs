@@ -35,6 +35,9 @@ use crate::cron::model::crontab_document::CrontabDocument;
 ///   id. Nothing is installed.
 /// - [`CronError::CrontabRefused`] when `crontab` refused the table. The entry
 ///   keeps the state it had.
+/// - [`CronError::Bound`] when `crontab` outlived its deadline and was killed with its
+///   process group. Not a refusal: the table may or may not have been replaced, so the
+///   caller reads it again before it believes either outcome.
 pub fn set_cron_entry_enabled(
     host: &dyn CronHost,
     distro: &dyn DistroAdapter,

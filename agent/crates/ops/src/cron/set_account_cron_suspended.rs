@@ -45,7 +45,9 @@ use crate::cron::model::crontab_document::CrontabDocument;
 /// Returns [`CronError::Account`] when `account` is not a hosting account this
 /// panel may act on, checked first and before the crontab is touched, and
 /// [`CronError::CrontabRefused`] when the crontab cannot be read or
-/// the new table is refused. The account keeps the state it had.
+/// the new table is refused. The account keeps the state it had. Returns
+/// [`CronError::Bound`] when `crontab` outlived its deadline and was killed with its
+/// process group, in which case the table may or may not have been replaced.
 pub fn set_account_cron_suspended(
     host: &dyn CronHost,
     distro: &dyn DistroAdapter,

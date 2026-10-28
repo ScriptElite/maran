@@ -90,6 +90,9 @@ use crate::cron::model::crontab_document::CrontabDocument;
 ///   written. Nothing is installed.
 /// - [`CronError::CrontabRefused`] when `crontab` refused the table. The
 ///   command file is removed and the live crontab is what it was.
+/// - [`CronError::Bound`] when `crontab` outlived its deadline and was killed with its
+///   process group. Not a refusal: the table may or may not have been replaced, so the
+///   caller reads it again before it believes either outcome.
 /// - [`CronError::EntryFileUnreadable`] when an existing entry's command file
 ///   is there and could not be read, which is checked before anything is
 ///   written.
