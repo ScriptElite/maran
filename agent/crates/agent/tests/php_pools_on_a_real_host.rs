@@ -61,7 +61,7 @@ fn the_php_fpm_binary_the_adapter_names_exists_on_this_family() {
     // validator, so a path that is merely plausible turns every pool write on
     // that family into a failure to start the validator — which the operator
     // sees as "php-fpm validation failed" with nothing to fix.
-    let binary = polygon_distro().php_fpm_binary(PolygonPhp::VERSION);
+    let binary = polygon_distro().php_fpm_binary(&PolygonPhp::version());
     assert!(
         Path::new(&binary).exists(),
         "the adapter names {binary} as this family's php-fpm and it is not there"

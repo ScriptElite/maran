@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::utils::system_account::SystemAccount;
 use maran_agent_core::validation::system::cron_command::CronCommand;
 use maran_agent_core::validation::system::cron_entry_id::CronEntryId;
@@ -35,7 +36,7 @@ use maran_agent_core::validation::system::managed_account::ManagedAccount;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_agent_core::validation::system::sftp_user_name::SftpUserName;
 use maran_agent_core::validation::web::domain::Domain;
-use maran_distro::{DistroFamily, adapter_for};
+use maran_distro::{AdapterBinary, DistroFamily, adapter_for};
 use maran_ops::accounts::{AccountError, AccountOperations, CommandOutcome, SystemHost};
 use maran_ops::cron::model::cron_run_record::CronRunRecord;
 use maran_ops::cron::{CronError, CronHost};
@@ -126,15 +127,20 @@ impl SystemHost for BlockingSystemHost {
     /// which is the pair `passwd -S` alone cannot express. Anything else would
     /// make that rpc fail here for a reason that has nothing to do with what
     /// this file tests.
-    fn run(&self, _program: &str, arguments: &[&str]) -> Result<CommandOutcome, AccountError> {
+    fn run(
+        &self,
+        _program: &AdapterBinary,
+        arguments: &[&str],
+        _class: CallClass,
+    ) -> Result<CommandOutcome, AccountError> {
         self.touch();
         let stdout = match arguments {
             ["-S", username] => format!("{username} L 2026-01-01 0 99999 7 -1\n"),
-            ["shadow", username] => format!("{username}:!:20704:0:99999:7:::\n"),
+            ["--", "shadow", username] => format!("{username}:!:20704:0:99999:7:::\n"),
             // `quotaon -p <mountpoint>`, for the usage rpc's own enforceability
             // check: answered as an enforceable filesystem, since what this
             // file tests is scheduling, not quota classification.
-            ["-p", _] => "Quota for users are enabled on mountpoint /home\n".to_owned(),
+            ["-p", "--", _] => "Quota for users are enabled on mountpoint /home\n".to_owned(),
             _ => FAKE_UID_OUTPUT.to_owned(),
         };
 
@@ -201,7 +207,12 @@ struct UnusedPhpHost;
 
 impl ConfigHost for UnusedPhpHost {
     /// Unreachable: no rpc driven here writes a pool.
-    fn run(&self, _program: &str, _arguments: &[&str]) -> Result<SafeWriteOutcome, SafeWriteError> {
+    fn run(
+        &self,
+        _program: &AdapterBinary,
+        _arguments: &[&str],
+        _class: CallClass,
+    ) -> Result<SafeWriteOutcome, SafeWriteError> {
         unreachable!("no rpc in this file reaches the php host")
     }
 }
@@ -277,9 +288,10 @@ impl SftpHost for UnusedSftpHost {
     /// Unreachable: no rpc driven here touches a login.
     fn run(
         &self,
-        _program: &str,
+        _program: &AdapterBinary,
         _arguments: &[&str],
         _stdin: Option<&str>,
+        _class: CallClass,
     ) -> Result<CommandOutcome, SftpError> {
         unreachable!("no rpc in this file reaches the sftp host")
     }
@@ -356,7 +368,12 @@ struct UnusedFtpsHost;
 
 impl FtpsHost for UnusedFtpsHost {
     /// Unreachable: see [`UnusedFtpsHost`].
-    fn run(&self, _program: &str, _arguments: &[&str]) -> Result<CommandOutcome, FtpsError> {
+    fn run(
+        &self,
+        _program: &AdapterBinary,
+        _arguments: &[&str],
+        _class: CallClass,
+    ) -> Result<CommandOutcome, FtpsError> {
         unreachable!("no rpc in this file reaches the ftps host")
     }
 
@@ -379,7 +396,7 @@ impl FtpsHost for UnusedFtpsHost {
     /// Unreachable: see [`UnusedFtpsHost`].
     fn run_candidate(
         &self,
-        _program: &str,
+        _program: &AdapterBinary,
         _contents: &str,
         _arguments: &[&str],
         _deadline: Duration,
@@ -410,9 +427,10 @@ impl FtpsHost for UnusedFtpsHost {
     /// Unreachable: see [`UnusedFtpsHost`].
     fn run_with_stdin(
         &self,
-        _program: &str,
+        _program: &AdapterBinary,
         _arguments: &[&str],
         _stdin: &str,
+        _class: CallClass,
     ) -> Result<CommandOutcome, FtpsError> {
         unreachable!("no rpc in this file reaches the ftps host")
     }
@@ -492,7 +510,12 @@ impl LoginsHost for UnusedLoginsHost {
     }
 
     /// Unreachable: an account with no login is asked about none.
-    fn run(&self, _program: &str, _arguments: &[&str]) -> Result<CommandOutcome, LoginsError> {
+    fn run(
+        &self,
+        _program: &AdapterBinary,
+        _arguments: &[&str],
+        _class: CallClass,
+    ) -> Result<CommandOutcome, LoginsError> {
         unreachable!("no login exists in this file, so none is asked about")
     }
 }

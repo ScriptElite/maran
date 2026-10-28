@@ -17,6 +17,8 @@
 // workspace-wide bans on unwrap/expect/panic are lifted here only.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+#[path = "fixtures/in_process_agent.rs"]
+mod in_process_agent;
 #[path = "fixtures/polygon_account.rs"]
 mod polygon_account;
 #[path = "fixtures/polygon_config_file.rs"]
@@ -27,9 +29,13 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use maran_agent::proto::sites_service_client::SitesServiceClient;
+use maran_agent::proto::{CreateSiteRequest, ErrorCode, SiteBackendType, create_site_response};
 use maran_agent_core::agent_paths::AgentPaths;
 use maran_agent_core::privs::fork_as_account::fork_as_account;
 use maran_agent_core::privs::priv_error::PrivError;
+use maran_agent_core::utils::bound_exceeded::BoundExceeded;
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::fs::file_mode::FileMode;
 use maran_agent_core::validation::fs::relative_path::RelativePath;
 use maran_agent_core::validation::web::domain::Domain;
@@ -44,6 +50,7 @@ use maran_ops::sites::{
 };
 use maran_ops::ssl::{ProcessSslHost, delete_site_with_certificate, generate_self_signed};
 
+use in_process_agent::InProcessAgent;
 use polygon_account::PolygonAccount;
 use polygon_config_file::PolygonConfigFile;
 
@@ -598,7 +605,8 @@ fn deleting_an_account_leaves_a_host_the_real_php_fpm_will_still_start() {
     // gone but that php-fpm will still start, and only php-fpm can say so — a
     // pool that was emptied, renamed, or left in a directory php-fpm no longer
     // reads would pass a file check and fail this.
-    let checked = std::process::Command::new(polygon_distro().php_fpm_binary(POLYGON_PHP_VERSION))
+    let php_version = PhpVersion::parse(POLYGON_PHP_VERSION).expect("a valid PHP version");
+    let checked = std::process::Command::new(polygon_distro().php_fpm_binary(&php_version))
         .arg(VALIDATE_ARGUMENT)
         .output()
         .expect("the polygon image installs php-fpm");
@@ -2989,4 +2997,341 @@ fn two_creations_of_the_same_domain_leave_one_vhost_and_never_overwrite_the_firs
     );
     assert_eq!(server_blocks_naming("same.hn7.test"), 1);
     assert_nginx_loads(&vhost);
+}
+
+/// The name of the include the hung-validator tests plant: sorted after every
+/// vhost the agent writes, and matched by the `*.conf` include.
+const HANG_FILE_NAME: &str = "zz-maran-hang.conf";
+
+/// What a killed program is given, on top of its deadline, to be reaped and
+/// for the rollback to finish, before a hung-validator test declares the bound
+/// broken.
+const REAP_AND_ROLLBACK_BUDGET: Duration = Duration::from_secs(30);
+
+/// How long a write for another account may take once the validator can run
+/// again. A real `nginx -t` plus reload takes a fraction of a second; a lock
+/// still held by the timed-out write would keep this waiting for good.
+const NEXT_WRITE_BUDGET: Duration = Duration::from_secs(15);
+
+/// Plants a first-in-first-out file where nginx's `include` glob finds it.
+///
+/// `nginx -t` opens every file the glob names, and `open(2)` on a FIFO with no
+/// writer blocks for ever: the validator hangs the way a validator stuck on an
+/// unreachable upstream name does, with no dependence on the network. Created
+/// with `mkfifo`, which both families ship in coreutils. The returned guard
+/// removes it again, on a panic too.
+///
+/// # Panics
+///
+/// Panics when the FIFO cannot be made.
+fn plant_hanging_include() -> PolygonConfigFile {
+    let path = Path::new(AgentPaths::NGINX_INCLUDE_DIRECTORY).join(HANG_FILE_NAME);
+    let made = std::process::Command::new("/usr/bin/mkfifo")
+        .arg("--")
+        .arg(&path)
+        .status()
+        .expect("mkfifo can be started");
+    assert!(made.success(), "mkfifo failed to make {path:?}");
+
+    PolygonConfigFile::at(path)
+}
+
+/// Like [`within`], with the budget given by the caller.
+///
+/// # Panics
+///
+/// Panics, naming `what`, when `body` outlasts `budget`.
+fn within_budget<T: Send + 'static>(
+    what: &str,
+    budget: Duration,
+    body: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(body());
+    });
+
+    receiver
+        .recv_timeout(budget)
+        .unwrap_or_else(|_| panic!("{what} did not finish within {budget:?}"))
+}
+
+/// What a bounded `create_site` came back with, reduced to what crosses a
+/// thread boundary.
+struct TimedCreation {
+    /// Whether the call ended in the typed deadline error.
+    timed_out: bool,
+    /// The call's result, for a failure message.
+    summary: String,
+    /// How long the call took.
+    elapsed: Duration,
+}
+
+/// Creates a static site for `account` at `domain` with the real hosts on a
+/// thread of its own and reports how it ended and how long it took.
+fn create_static_site_timed(
+    account: &PolygonAccount,
+    domain: &Domain,
+    what: &str,
+    budget: Duration,
+) -> TimedCreation {
+    let input = static_site(account, domain);
+
+    within_budget(what, budget, move || {
+        let started = std::time::Instant::now();
+        let result = create_polygon_site(&ProcessSiteHost::new(), &input);
+        let elapsed = started.elapsed();
+
+        TimedCreation {
+            timed_out: matches!(
+                result,
+                Err(SitesOpError::Bound(BoundExceeded::TimedOut { .. }))
+            ),
+            summary: format!("{result:?}"),
+            elapsed,
+        }
+    })
+}
+
+/// How long the test waits for something the host does on its own: a probe to
+/// show up in `/proc`, or a killed validator to be gone from it.
+const PROCESS_TABLE_BUDGET: Duration = Duration::from_secs(10);
+
+/// Gap between two looks at the process table.
+const PROCESS_TABLE_POLL: Duration = Duration::from_millis(50);
+
+/// Polls `condition` until it holds or `budget` is spent, and answers whether it
+/// held. A poll with a timeout and not a sleep: the answer comes the moment the
+/// condition is true.
+fn wait_until(budget: Duration, mut condition: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + budget;
+    loop {
+        if condition() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(PROCESS_TABLE_POLL);
+    }
+}
+
+/// How many live processes are this family's `nginx -t`, found by their exact
+/// argument vector in `/proc`.
+///
+/// Read from `cmdline` and not from a process name, so an `nginx` master or
+/// worker is not counted, and a zombie (whose `cmdline` is empty) is not counted
+/// either: a killed validator that has been reaped and one that is merely waiting
+/// to be reaped are both "gone" for this question.
+///
+/// # Panics
+///
+/// Panics when `/proc` cannot be listed.
+fn running_validators() -> usize {
+    let wanted = format!("{}\0{VALIDATE_ARGUMENT}\0", polygon_distro().nginx_binary());
+
+    std::fs::read_dir("/proc")
+        .expect("/proc can be listed")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+        })
+        .filter(|entry| {
+            std::fs::read(entry.path().join("cmdline"))
+                .is_ok_and(|cmdline| cmdline == wanted.as_bytes())
+        })
+        .count()
+}
+
+/// Proves, with the FIFO in place, that this family's `nginx -t` really blocks
+/// on it and that [`running_validators`] can see such a process.
+///
+/// The positive control of the "the killed validator is gone" assertion: a scan
+/// that matched nothing, because of how `cmdline` is spelled on this family,
+/// would report every validator gone whether or not the agent had killed it.
+/// The probe is a validator this test starts itself, so it is also the answer to
+/// "does the hang need anything this family's nginx does not do".
+///
+/// # Panics
+///
+/// Panics when the probe cannot be started, does not hang, or is still counted
+/// after it has been killed and reaped.
+fn prove_the_fifo_hangs_a_validator_the_scan_can_see() {
+    let mut probe = std::process::Command::new(polygon_distro().nginx_binary())
+        .arg(VALIDATE_ARGUMENT)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the polygon image installs nginx");
+
+    let seen = wait_until(PROCESS_TABLE_BUDGET, || running_validators() == 1);
+    probe.kill().expect("the probe can be killed");
+    probe.wait().expect("the probe can be reaped");
+
+    assert!(
+        seen,
+        "with a FIFO in the include directory, `nginx -t` must stay running and be seen once in \
+         /proc; it was not, so the hang this test relies on does not happen on this family"
+    );
+    assert_eq!(
+        running_validators(),
+        0,
+        "the probe was killed and reaped and must no longer be counted"
+    );
+}
+
+#[test]
+#[ignore = "hangs the real nginx -t on purpose and waits out its deadline: polygon only"]
+fn a_validator_that_hangs_on_a_real_host_is_killed_at_its_deadline_the_vhost_is_restored_and_the_next_write_proceeds()
+ {
+    PolygonAccount::require_polygon();
+    ensure_nginx_is_running();
+    let hung = PolygonAccount::create("polyhangone");
+    let next = PolygonAccount::create("polyhangtwo");
+    let hung_domain = Domain::parse("hung.example.test").expect("a valid domain");
+    let next_domain = Domain::parse("next.example.test").expect("a valid domain");
+    let hung_vhost = SitePaths::for_site(hung.name(), &hung_domain).config_path;
+    let next_vhost = SitePaths::for_site(next.name(), &next_domain).config_path;
+    let _next_vhost = PolygonConfigFile::at(&next_vhost);
+
+    let fifo = plant_hanging_include();
+    prove_the_fifo_hangs_a_validator_the_scan_can_see();
+    let deadline = CallClass::Validate.deadline();
+    let outcome = create_static_site_timed(
+        &hung,
+        &hung_domain,
+        "a create_site whose nginx -t hangs",
+        deadline + REAP_AND_ROLLBACK_BUDGET,
+    );
+
+    assert!(
+        outcome.timed_out,
+        "a hung validator must end the write with the typed deadline error, got {}",
+        outcome.summary
+    );
+    assert!(
+        outcome.elapsed >= deadline,
+        "the validator was stopped after {:?}, before its deadline of {deadline:?}",
+        outcome.elapsed
+    );
+    assert!(
+        !hung_vhost.exists(),
+        "a write whose validator was killed must leave no vhost behind at {hung_vhost:?}"
+    );
+    assert!(
+        wait_until(PROCESS_TABLE_BUDGET, || running_validators() == 0),
+        "the validator the agent started must be gone once the write has returned, not left \
+         blocked on the FIFO"
+    );
+
+    // The lock the hung write held is released and the next tenant is not
+    // starved: with the FIFO gone, another account's write completes quickly.
+    drop(fifo);
+    let following = create_static_site_timed(
+        &next,
+        &next_domain,
+        "the create_site that followed the timed-out one",
+        NEXT_WRITE_BUDGET,
+    );
+    assert!(
+        following.summary.starts_with("Ok("),
+        "the write after a timed-out one must succeed, got {}",
+        following.summary
+    );
+    assert!(
+        next_vhost.exists(),
+        "the following write must have written its vhost at {next_vhost:?}"
+    );
+    assert_valid_nginx_tree("the tree after a hung validator was killed and the next write ran");
+}
+
+#[test]
+#[ignore = "hangs the real nginx -t on purpose and waits out its deadline: polygon only"]
+fn a_hung_validator_reaches_the_panel_as_system_failure_over_the_real_rpc() {
+    PolygonAccount::require_polygon();
+    ensure_nginx_is_running();
+    let hung = PolygonAccount::create("polyhangrpc");
+    let next = PolygonAccount::create("polyhangrpctwo");
+    let next_vhost = SitePaths::for_site(
+        next.name(),
+        &Domain::parse("rpcnext.example.test").expect("a valid domain"),
+    )
+    .config_path;
+    let _next_vhost = PolygonConfigFile::at(&next_vhost);
+
+    let deadline = CallClass::Validate.deadline();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("a tokio runtime");
+
+    let request = |account: &PolygonAccount, domain: &str| CreateSiteRequest {
+        account_username: account.name().as_str().to_owned(),
+        domain: domain.to_owned(),
+        backend_type: SiteBackendType::Static as i32,
+        ..CreateSiteRequest::default()
+    };
+    let hung_request = request(&hung, "rpchung.example.test");
+    let next_request = request(&next, "rpcnext.example.test");
+
+    runtime.block_on(async move {
+        let agent = InProcessAgent::start().await;
+
+        // Planted only now. `serve` validates the web tree once before it binds
+        // (`reconcile_web_tree`), so a FIFO already in place would hang the
+        // agent's STARTUP for a whole deadline and the test would blame the
+        // bind, not the request it is about.
+        let fifo = plant_hanging_include();
+
+        let refused = tokio::time::timeout(
+            deadline + REAP_AND_ROLLBACK_BUDGET,
+            SitesServiceClient::new(agent.channel()).create_site(hung_request),
+        )
+        .await
+        .expect("the rpc answered within the validator's deadline plus the reap budget")
+        .expect("the rpc itself succeeds: the failure is a typed payload")
+        .into_inner();
+
+        match refused.result {
+            Some(create_site_response::Result::Error(error)) => {
+                assert_eq!(
+                    error.code,
+                    ErrorCode::SystemFailure as i32,
+                    "a deadline is a fault of the host: {}",
+                    error.message
+                );
+                assert!(
+                    error.tool_output.is_empty(),
+                    "nothing the killed program printed may be forwarded, got {:?}",
+                    error.tool_output
+                );
+                assert!(
+                    error.message.contains("nginx"),
+                    "the message must name the program that was stopped: {}",
+                    error.message
+                );
+            }
+            other => panic!("a hung validator must answer with a typed error, got {other:?}"),
+        }
+
+        drop(fifo);
+        let following = tokio::time::timeout(
+            NEXT_WRITE_BUDGET,
+            SitesServiceClient::new(agent.channel()).create_site(next_request),
+        )
+        .await
+        .expect("the rpc after a timed-out one answers promptly")
+        .expect("the rpc itself succeeds")
+        .into_inner();
+
+        assert!(
+            matches!(following.result, Some(create_site_response::Result::Ok(_))),
+            "the write after a timed-out one must succeed, got {following:?}"
+        );
+    });
 }
