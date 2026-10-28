@@ -5,6 +5,22 @@ than a strict category list: what changed and why it matters to somebody running
 
 ## Unreleased
 
+**A signed-in customer could reach any API endpoint that forgot to declare its authorization.** The
+fallback policy, which applies to every endpoint with no authorization metadata, only required a
+signed-in user at customer level. Measured against a test-only endpoint with no metadata: a customer
+got 200, and on an unknown path or a wrong HTTP verb a customer got 404 and 405 instead of a refusal.
+The fallback is now administrator-only: anonymous callers get 401, customers get 403 (an empty body)
+and administrators are admitted, so a future endpoint that omits its policy is closed to customers by
+default. The default policy for a bare `[Authorize]` stays customer-level.
+
+Every endpoint now names its policy instead of relying on either default: the dashboard, session
+listing and revoking, sign-out-everywhere and the two-factor management actions are declared as
+customer-level, and the setup controller marks its two anonymous actions individually rather than the
+whole class. Customer behaviour is unchanged, as measured over the dashboard, session, two-factor,
+account and site flows. New tests fail if an action or route-table endpoint names no known policy, if
+the set of anonymous endpoints changes, or if the fallback is weakened. This is an authorization
+change, so it needs a second human review before it reaches `main`.
+
 **Reserved host names are refused for new sites, aliases, certificates and FTPS.** A tenant could
 create a site named for an IP address, `localhost`, a `.local`/`.lan`/`.internal`/`.invalid` name or
 the panel's own host name, and have nginx serve it and ACME try to issue for it. Measured before

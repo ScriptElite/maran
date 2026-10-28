@@ -1,3 +1,4 @@
+using Maran.Host.Authorization;
 using Maran.Modules.Accounts.Common;
 using Maran.Modules.Accounts.Queries.ListAccounts;
 using Maran.Modules.Backups.Common;
@@ -96,7 +97,9 @@ public static class DashboardEndpoint
                 Results.Ok(await DescribeAsync(bus, currentUser, clock, cancellationToken)))
             // Authenticated, never anonymous: /api/v1/modules may be read by anybody because it
             // describes what this build composed, while this route describes what the server holds.
-            .RequireAuthorization();
+            // Any signed-in caller, customer included — the payload is shaped by who is asking — so
+            // the policy is named rather than left to the administrator-only fallback.
+            .RequireAuthorization(RolePolicies.AnyAuthenticated);
         return endpoints;
     }
 
