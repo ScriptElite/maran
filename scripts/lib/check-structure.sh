@@ -757,6 +757,125 @@ while IFS= read -r file; do
   fi
 done < <(find agent/crates/ops/src agent/crates/agent/src -name '*.rs' -not -path '*/tests/*' 2>/dev/null | sort)
 
+# 17d. The bounded spawn core is called from the process hosts and nowhere else, and never with a
+#      program built from a path literal. `spawn_argv`, `run_bounded`, `run_unthreaded`,
+#      `run_for_window` and `run_discarding` take `&Path`, not `AdapterBinary`, because
+#      `agent-core` cannot depend on `distro` and the tests drive the core with a fixture program.
+#      So the type system does NOT stop a caller from handing the core a path that did not come
+#      from the DistroAdapter -- `spawn_argv(Path::new("/bin/sh"), ...)` compiles. What keeps that
+#      true is that every real caller sits in a process host whose `program` argument is an
+#      `AdapterBinary` (`program.as_path()`), and this check keeps the callers to exactly those
+#      files: a new caller is a new host, and a new host is added to the list below IN THE SAME PR
+#      as rules/rust.md names it (the list is written here, not inferred -- an inferred
+#      exemption is a rule that quietly stops applying).
+#
+#      Two rules, both on production code of ops, agent, distro and templates (agent-core owns the
+#      core and is the one crate that defines it; tests drive it on purpose and are skipped):
+#        (a) a call of the core outside the sanctioned list is reported;
+#        (b) a first argument that is a path literal (`Path::new("...")`, `PathBuf::from(...)`),
+#            or a `program:` field built that way, is reported anywhere -- the sanctioned files
+#            included, because a host that spawns a literal has stopped asking the adapter.
+#      What it CANNOT see, stated rather than implied: a path laundered through a variable
+#      (`let p = Path::new("/bin/sh"); spawn_argv(p, ...)`), a call whose first argument sits on
+#      the next line, and `.as_path()` taken from something that is not an AdapterBinary inside a
+#      sanctioned file. Those stay with review; this makes the cheap, direct misuse a red build.
+#
+#      Why not clippy `disallowed-methods`: it would need an `#[allow(clippy::disallowed_methods)]`
+#      in every sanctioned file, and an `#[allow]` written to make a gate pass is the thing the
+#      rules avoid.
+#
+#      CENSUS (rules/testing.md): the 14 listed files are exactly what this prints, and it is the
+#      positive control -- each of them must still hit the pattern, so a pattern that stopped
+#      matching fails the stale-entry check below instead of passing silently:
+#        grep -rlE '\b(spawn_argv|run_bounded|run_unthreaded|run_for_window|run_discarding)\(|SpawnRequest \{' \
+#          agent/crates/ops/src agent/crates/agent/src | grep -v /tests/
+spawn_call_re='\b(spawn_argv|run_bounded|run_unthreaded|run_for_window|run_discarding)\(|SpawnRequest \{'
+spawn_literal_re='\b(spawn_argv|run_bounded|run_unthreaded|run_for_window|run_discarding|run_archiver|run_client)\([[:space:]]*Path(Buf)?::(new|from)\(|program:[[:space:]]*Path(Buf)?::(new|from)\('
+sanctioned_spawn_hosts=(
+  agent/crates/ops/src/accounts/process_system_host.rs
+  agent/crates/ops/src/backup/list_archive_members.rs
+  agent/crates/ops/src/backup/process_backup_host.rs
+  agent/crates/ops/src/backup/run_discarding.rs
+  agent/crates/ops/src/cron/crontab_spool.rs
+  agent/crates/ops/src/db/process_db_host.rs
+  agent/crates/ops/src/firewall/process_firewall_host.rs
+  agent/crates/ops/src/ftps/process_ftps_host.rs
+  agent/crates/ops/src/logins/process_logins_host.rs
+  agent/crates/ops/src/monitor/process_monitor_host.rs
+  agent/crates/ops/src/php/process_php_host.rs
+  agent/crates/ops/src/sftp/process_sftp_host.rs
+  agent/crates/ops/src/sites/process_site_host.rs
+  agent/crates/ops/src/ssl/process_ssl_host.rs
+)
+
+# The lines of a file that CALL the core: a match that is not a comment line and not a `fn`/`use`
+# declaration (the core's own definitions, and run_discarding's, are declarations of the name).
+spawn_call_lines() {
+  grep -nE "$spawn_call_re" "$1" 2>/dev/null |
+    grep -vE '^[0-9]+:[[:space:]]*(//|(pub(\([a-z]+\))? )?(async )?fn |use )' || true
+}
+
+# Self-controls on the two patterns, run before they are trusted. Positive: a line the check must
+# flag. Inverse: the sanctioned shape it must not. A pattern that matched everything or nothing
+# would otherwise read as a clean tree.
+if ! printf '%s\n' '    spawn_argv(Path::new("/bin/sh"), arguments, class)' | grep -qE "$spawn_literal_re"; then
+  report "scripts/lib/check-structure.sh: check 17d's literal pattern did not match \`spawn_argv(Path::new(\"/bin/sh\"), ...)\` -- the control that proves it can see a violation failed (rules/testing.md)"
+fi
+if ! printf '%s\n' '    run_bounded(SpawnRequest { program: PathBuf::from("/bin/sh"), ..request })' | grep -qE "$spawn_literal_re"; then
+  report "scripts/lib/check-structure.sh: check 17d's literal pattern did not match a \`program: PathBuf::from(...)\` field -- the control that proves it can see a violation failed (rules/testing.md)"
+fi
+if printf '%s\n' '        spawn_argv(program.as_path(), arguments, class)' | grep -qE "$spawn_literal_re"; then
+  report "scripts/lib/check-structure.sh: check 17d's literal pattern matched the sanctioned \`spawn_argv(program.as_path(), ...)\` -- the inverse control failed, so the check would flag every host (rules/testing.md)"
+fi
+# The call pattern must see a known real call: agent-core's own spawn_argv hands its request to
+# run_bounded, so that file has to produce a hit or the pattern (or the filter) has gone blind.
+if [ -z "$(spawn_call_lines agent/crates/agent-core/src/utils/spawn_argv.rs)" ]; then
+  report "agent/crates/agent-core/src/utils/spawn_argv.rs: check 17d's call pattern found no call of run_bounded in the one file known to make one -- the check cannot observe what it reports on (rules/testing.md)"
+fi
+
+# (a) Stale entries: a listed host must still call the core, else the exemption is a named hole.
+spawn_host_count=0
+for host in "${sanctioned_spawn_hosts[@]}"; do
+  spawn_host_count=$((spawn_host_count + 1))
+  if [ ! -f "$host" ]; then
+    report "scripts/lib/check-structure.sh: check 17d lists $host as a process host and no such file exists -- an exemption for a file that does not exist is a hole the next file of that name falls into"
+  elif [ -z "$(spawn_call_lines "$host")" ]; then
+    report "$host: listed in check 17d as a process host but calls none of the bounded spawn core -- remove it from the list, or the exemption is a hole"
+  fi
+done
+if [ "$spawn_host_count" -eq 0 ]; then
+  report "scripts/lib/check-structure.sh: check 17d's process-host list read as empty, so the stale-entry guard examined nothing -- that is a failure to observe and not a clean list (rules/testing.md)"
+fi
+
+spawn_scanned=0
+while IFS= read -r file; do
+  spawn_scanned=$((spawn_scanned + 1))
+
+  # (a) a call from a file that is not a sanctioned process host.
+  is_host=0
+  for host in "${sanctioned_spawn_hosts[@]}"; do
+    [ "$file" = "$host" ] && is_host=1
+  done
+  if [ "$is_host" -eq 0 ]; then
+    first="$(spawn_call_lines "$file" | head -1 | cut -d: -f1)"
+    if [ -n "$first" ]; then
+      report "$file:$first: calls the bounded spawn core outside a process host -- the program must come from an AdapterBinary in a host listed in check 17d (add the host to that list and to rules/rust.md first)"
+    fi
+  fi
+
+  # (b) a program built from a path literal, in any production file.
+  offenders="$(grep -nE "$spawn_literal_re" "$file" | grep -vE '^[0-9]+:[[:space:]]*//' || true)"
+  if [ -n "$offenders" ]; then
+    line="$(printf '%s' "$offenders" | head -1 | cut -d: -f1)"
+    report "$file:$line: a program built from a path literal reaches the bounded spawn core -- a root spawn takes its program from an AdapterBinary (rules/security.md item 3)"
+  fi
+done < <(find agent/crates/ops/src agent/crates/agent/src agent/crates/distro/src agent/crates/templates/src \
+           -name '*.rs' -not -path '*/tests/*' 2>/dev/null | sort)
+# The vacuity guard on the population: an empty traversal reads exactly like a clean tree.
+if [ "$spawn_scanned" -eq 0 ]; then
+  report "scripts/lib/check-structure.sh: check 17d scanned no .rs file under ops, agent, distro or templates -- that is a failure to observe and not a clean run (rules/testing.md)"
+fi
+
 # 17c. The provisioned-password alphabet is the same string in all THREE languages that hold it.
 #      The backend mints these passwords, the agent's `Password` type refuses anything outside its
 #      set, and the SPA generates one for the first-run administrator. A character the agent
