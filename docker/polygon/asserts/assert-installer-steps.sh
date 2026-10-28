@@ -546,6 +546,9 @@ main() {
   assert_the_staging_gate_refuses_what_install_left_wrong
   assert_the_agent_unit_declares_its_writable_roots
   assert_the_agent_unit_never_makes_usr_writable
+  assert_the_agent_unit_keeps_its_measured_hardening
+  assert_the_agent_unit_never_hides_other_users_processes
+  assert_the_agent_unit_renders_through_the_installer
   assert_preflight_warns_about_backup_space_without_refusing
 
   # Step 89, and the ORDER inside this group is the step's own order, because the step's whole

@@ -147,6 +147,179 @@ agent's own sandbox never has to open /usr."
 }
 
 
+# The agent unit directives issue #91 adopted or kept, each as the exact line the unit must carry
+# once. Spelled out here and not read from the unit, so deleting a line from the unit cannot also
+# delete its check. When the verification phase removes a directive that failed its measurement,
+# the entry goes from this list and from AGENT_UNIT_HARDENING_COUNT in the same change.
+readonly AGENT_UNIT_HARDENING=(
+  "SystemCallArchitectures=native"
+  "ProtectControlGroups=true"
+  "ProtectKernelModules=true"
+  "RestrictSUIDSGID=true"
+  "MemoryDenyWriteExecute=true"
+)
+readonly AGENT_UNIT_HARDENING_COUNT=5
+
+
+# agent_unit_hardening_defect: prints why the unit at $1 lacks one of its adopted hardening
+# directives, and prints nothing when all are present.
+#
+# Exactly one uncommented line per key, with the expected value. More than one is a defect too:
+# systemd takes the LAST assignment of a key, so a `RestrictSUIDSGID=false` appended below the
+# good line would win while the good line sat there looking right.
+agent_unit_hardening_defect() {
+  local file="$1" line key count checked=0
+  for line in "${AGENT_UNIT_HARDENING[@]}"; do
+    key="${line%%=*}"
+    count="$(grep -c "^${key}=" "$file" || true)"
+    if [ "$count" -ne 1 ]; then
+      echo "${key}= appears on ${count} uncommented lines, not exactly one (systemd keeps the last assignment)"
+      return 0
+    fi
+    if ! grep -qx "$line" "$file"; then
+      echo "${key}= is not set to the adopted value (expected the line '${line}')"
+      return 0
+    fi
+    checked=$((checked + 1))
+  done
+  # The vacuity guard: the loop is one list, and a list emptied of its entries checks nothing.
+  if [ "$checked" -ne "$AGENT_UNIT_HARDENING_COUNT" ]; then
+    echo "the hardening list checked ${checked} directives, not the ${AGENT_UNIT_HARDENING_COUNT} adopted"
+  fi
+  return 0
+}
+
+
+# assert_the_agent_unit_keeps_its_measured_hardening: issue #91's directives stay in the unit, and
+# the checker is shown to refuse each way of losing one before the unit is trusted to it.
+#
+# The unit's text only. A key the running systemd does not know is logged and IGNORED, so the text
+# can name a directive the loaded unit does not have; the loaded-unit read-back is the install
+# polygon's job, not this image's.
+assert_the_agent_unit_keeps_its_measured_hardening() {
+  local work defect
+  work="$(mktemp -d)"
+
+  defect="$(agent_unit_hardening_defect "$AGENT_UNIT")"
+  [ -z "$defect" ] \
+    || fail "$(basename "$AGENT_UNIT"): ${defect}. Issue #91 adopted these directives for the only root process; if one failed its measurement, remove it from the unit AND from AGENT_UNIT_HARDENING with the reason."
+
+  sed '/^RestrictSUIDSGID=true$/d' "$AGENT_UNIT" > "${work}/deleted.service"
+  [ -n "$(agent_unit_hardening_defect "${work}/deleted.service")" ] \
+    || fail "the hardening check ACCEPTED a unit with RestrictSUIDSGID= deleted; it guards nothing"
+  sed 's/^ProtectControlGroups=true$/ProtectControlGroups=false/' "$AGENT_UNIT" > "${work}/flipped.service"
+  [ -n "$(agent_unit_hardening_defect "${work}/flipped.service")" ] \
+    || fail "the hardening check ACCEPTED ProtectControlGroups=false"
+  { cat "$AGENT_UNIT"; echo "ProtectKernelModules=no"; } > "${work}/last-wins.service"
+  [ -n "$(agent_unit_hardening_defect "${work}/last-wins.service")" ] \
+    || fail "the hardening check ACCEPTED a later ProtectKernelModules=no that overrides the good line"
+  sed 's/^SystemCallArchitectures=native$/# SystemCallArchitectures=native/' "$AGENT_UNIT" > "${work}/commented.service"
+  [ -n "$(agent_unit_hardening_defect "${work}/commented.service")" ] \
+    || fail "the hardening check ACCEPTED a commented-out SystemCallArchitectures="
+  sed '/^MemoryDenyWriteExecute=true$/d' "$AGENT_UNIT" > "${work}/no-mdwe.service"
+  [ -n "$(agent_unit_hardening_defect "${work}/no-mdwe.service")" ] \
+    || fail "the hardening check ACCEPTED a unit with MemoryDenyWriteExecute= deleted"
+
+  rm -rf "$work"
+  echo "maran-agent.service carries all ${AGENT_UNIT_HARDENING_COUNT} adopted hardening directives exactly once, and the check refused all five planted breaks."
+  echo "UNOBSERVED HERE: this image boots no systemd. A key the running systemd does not know is logged and IGNORED, so the text can name a directive the loaded unit does not have."
+}
+
+
+# agent_unit_proc_defect: prints why the unit at $1 hides other users' processes from the agent,
+# and prints nothing when it does not.
+#
+# ProtectProc= other than `default` (invisible, noaccess, ptraceable) and ProcSubset=pid both do.
+agent_unit_proc_defect() {
+  local file="$1" value
+  value="$(grep '^ProtectProc=' "$file" | tail -1 | sed 's/^ProtectProc=//' || true)"
+  case "$value" in
+    ""|default) ;;
+    *) echo "ProtectProc=${value} hides other users' processes from a daemon without CAP_SYS_PTRACE"; return 0 ;;
+  esac
+  if grep -q '^ProcSubset=pid' "$file"; then
+    echo "ProcSubset=pid hides /proc/mounts and /proc/net, which account creation's quota step and the host metrics read"
+    return 0
+  fi
+  return 0
+}
+
+
+# assert_the_agent_unit_never_hides_other_users_processes: the one place this branch's safe answer
+# is an ABSENCE. With the hidepid options the agent could not see another uid's processes, so
+# suspension's `pkill --uid` would match nothing and be read as "no session open" (the customer's
+# session would keep writing), and `userdel --remove` would stop refusing a user with live
+# processes (the uid would later be reused by another tenant). Both fail silently, insecurely.
+assert_the_agent_unit_never_hides_other_users_processes() {
+  local work defect
+  work="$(mktemp -d)"
+
+  defect="$(agent_unit_proc_defect "$AGENT_UNIT")"
+  [ -z "$defect" ] \
+    || fail "$(basename "$AGENT_UNIT"): ${defect}. Suspension would record complete while the session lived on, and deletion would leave processes under a uid the next account is handed."
+
+  { cat "$AGENT_UNIT"; echo "ProtectProc=invisible"; } > "${work}/invisible.service"
+  [ -n "$(agent_unit_proc_defect "${work}/invisible.service")" ] \
+    || fail "the /proc check ACCEPTED ProtectProc=invisible; it guards nothing"
+  { cat "$AGENT_UNIT"; echo "ProtectProc=ptraceable"; } > "${work}/ptraceable.service"
+  [ -n "$(agent_unit_proc_defect "${work}/ptraceable.service")" ] \
+    || fail "the /proc check ACCEPTED ProtectProc=ptraceable"
+  { cat "$AGENT_UNIT"; echo "ProcSubset=pid"; } > "${work}/subset.service"
+  [ -n "$(agent_unit_proc_defect "${work}/subset.service")" ] \
+    || fail "the /proc check ACCEPTED ProcSubset=pid"
+  { cat "$AGENT_UNIT"; echo "ProtectProc=default"; } > "${work}/default.service"
+  [ -z "$(agent_unit_proc_defect "${work}/default.service")" ] \
+    || fail "the /proc check REFUSED ProtectProc=default, which hides nothing"
+
+  rm -rf "$work"
+  echo "maran-agent.service leaves /proc fully visible to the agent, and the check refused all three planted breaks and accepted the inverse control."
+}
+
+
+# assert_the_agent_unit_renders_through_the_installer: step 70's REAL render_agent_unit, run in a
+# child shell the way install.sh runs it, on the shipped unit.
+#
+# Hardening lines are text, but the rendered file is what systemd loads: a placeholder left behind,
+# a group not substituted or a ReadWritePaths= altered by the render would not show in the source.
+assert_the_agent_unit_renders_through_the_installer() {
+  local work rendered source_rw rendered_rw
+  work="$(mktemp -d)"
+  rendered="${work}/maran-agent.service"
+
+  MARAN_GROUP=maran LIB_DIR="$INSTALLER_LIB" \
+    bash -c 'set -euo pipefail
+. "$1"
+. "$2"
+render_agent_unit "$3"' _ "$COMMON_LIB" "$SERVICES_STEP" "$rendered" \
+    || fail "step 70's render_agent_unit failed on the shipped maran-agent.service"
+
+  ! grep -q '__MARAN_' "$rendered" \
+    || fail "the rendered maran-agent.service still holds a __MARAN_ placeholder"
+  grep -qx 'Group=maran' "$rendered" \
+    || fail "the rendered maran-agent.service does not carry Group=maran from install.sh's group"
+  [ "$(grep -c '^ReadWritePaths=' "$rendered" || true)" -eq 1 ] \
+    || fail "the rendered maran-agent.service does not hold exactly one ReadWritePaths= line"
+  source_rw="$(grep '^ReadWritePaths=' "$AGENT_UNIT")"
+  rendered_rw="$(grep '^ReadWritePaths=' "$rendered")"
+  [ "$source_rw" = "$rendered_rw" ] \
+    || fail "the render altered ReadWritePaths=: source '${source_rw}', rendered '${rendered_rw}'"
+  [ -z "$(agent_unit_hardening_defect "$rendered")" ] \
+    || fail "the rendered maran-agent.service lost an adopted hardening directive the source carries"
+
+  # Inverse control: the render must refuse to run without the group, not substitute an empty one.
+  if env -u MARAN_GROUP LIB_DIR="$INSTALLER_LIB" \
+    bash -c 'set -euo pipefail
+. "$1"
+. "$2"
+render_agent_unit "$3"' _ "$COMMON_LIB" "$SERVICES_STEP" "${work}/no-group.service" 2>/dev/null; then
+    fail "render_agent_unit succeeded without MARAN_GROUP; it would render a unit with an empty group"
+  fi
+
+  rm -rf "$work"
+  echo "step 70 renders maran-agent.service with no placeholder left, Group=maran, one unchanged ReadWritePaths= and every hardening directive intact."
+}
+
+
 # run_preflight_step: runs step 10's code THE WAY install.sh runs it — a plain command in a child
 # shell with `set -euo pipefail`, the step file sourced, and MARAN_PANEL_PORT exported first
 # because the step's `readonly MARAN_REQUIRED_PORTS="${MARAN_PANEL_PORT:?…}"` refuses to be sourced
