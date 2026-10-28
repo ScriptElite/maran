@@ -24,7 +24,10 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::safe_write::model::{Reload, Validator};
+use maran_agent_core::utils::call_class::CallClass;
+use maran_distro::AdapterBinary;
+
+use crate::safe_write::adapter_programs::{reload, validator};
 use crate::safe_write::{CommandOutcome, ConfigHost, SafeWriteError, create_config};
 
 /// The text nginx 1.24.0 prints for two vhosts naming `alice.test`, as the
@@ -81,13 +84,18 @@ impl FakeConfigHost {
 }
 
 impl ConfigHost for FakeConfigHost {
-    fn run(&self, program: &str, arguments: &[&str]) -> Result<CommandOutcome, SafeWriteError> {
+    fn run(
+        &self,
+        program: &AdapterBinary,
+        arguments: &[&str],
+        _class: CallClass,
+    ) -> Result<CommandOutcome, SafeWriteError> {
         let mut calls = self
             .calls
             .lock()
             .expect("the fixture lock is never poisoned");
         calls.push((
-            program.to_owned(),
+            program.to_string(),
             arguments
                 .iter()
                 .map(|argument| (*argument).to_owned())
@@ -108,22 +116,6 @@ impl ConfigHost for FakeConfigHost {
                 stderr: self.validation_stderr.clone(),
             })
         }
-    }
-}
-
-/// A validator argv stable across the tests below.
-fn validator() -> Validator<'static> {
-    Validator {
-        program: "/usr/sbin/nginx",
-        arguments: &["-t"],
-    }
-}
-
-/// A reload argv stable across the tests below.
-fn reload() -> Reload<'static> {
-    Reload {
-        program: "/usr/bin/systemctl",
-        arguments: &["reload", "nginx"],
     }
 }
 
