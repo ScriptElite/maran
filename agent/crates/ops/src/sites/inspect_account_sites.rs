@@ -138,7 +138,7 @@ fn file_stem(path: &Path) -> String {
 /// the one that refuses a suspension rather than certifying one
 /// ([`SiteSuspensionFact::serving_stub`]).
 fn serving_stub(host: &dyn SiteHost, account: &AccountName, path: &Path, contents: &str) -> bool {
-    let Ok(domain) = Domain::parse(&file_stem(path)) else {
+    let Ok(domain) = Domain::parse_existing(&file_stem(path)) else {
         return false;
     };
     let Ok(resolved) = resolved_site_paths(host, account, &domain) else {
