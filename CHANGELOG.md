@@ -5,6 +5,30 @@ than a strict category list: what changed and why it matters to somebody running
 
 ## Unreleased
 
+**Reserved host names are refused for new sites, aliases, certificates and FTPS.** A tenant could
+create a site named for an IP address, `localhost`, a `.local`/`.lan`/`.internal`/`.invalid` name or
+the panel's own host name, and have nginx serve it and ACME try to issue for it. Measured before
+the change: the agent's `Domain::parse` accepted `203.0.113.7`, `localhost`, `x.local` and the
+rest, and the API created a site named `203.0.113.7` and one named for the panel (both 201). The
+API and the agent now refuse the fixed set (a numeric final label, `localhost` and its
+subdomains, the special-use suffixes `local`, `localdomain`, `internal`, `lan`, `home.arpa` and
+`invalid`) on create site, aliases, issue and install certificate and enable FTPS. The API also
+refuses the panel's own name, and its `www.` form, for sites, aliases and certificates (not for
+FTPS), read from the new, optional `Panel__HostName` setting that the installer now writes into
+`panel.env` (a downgrade ignores the extra line). The refusal says only that the name cannot be
+used, in English, Russian and Armenian, and never echoes the name.
+
+The panel vhost's `server_name` is now lower-cased and comes from the same function as the
+certificate step; it falls back to `localhost` (it was `hostname -f`, or `_`), so re-running the
+installer can change it on a host whose name is unusable. No database or proto change. Sites that
+already exist under a reserved name are not removed: they can still be disabled, have their
+certificate removed, be inspected and be deleted, because those paths check the name's shape only.
+
+Not covered: the agent does not know the panel's name, so a compromised API could still ask it for
+a vhost under that name; the primary domain of a new account is not checked; the nginx and ACME
+behaviour was not observed on a real host. This change touches tenant isolation on a root-managed
+host and still needs a second reviewer before it reaches `main`.
+
 **The root agent's systemd unit is hardened further.** The unit that runs the agent as root kept
 the kernel's control-group files writable, let it load kernel modules, accepted 32-bit system calls
 and let it create setuid and setgid files. It now sets `ProtectControlGroups=true`,
