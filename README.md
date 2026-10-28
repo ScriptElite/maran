@@ -277,7 +277,7 @@ request has to pass, and the changes that need a second reviewer and a written t
 Looking for a place to start? The issues labelled
 [`good first issue`](https://github.com/innovayse/maran/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 are small, self-contained and say which files to change and how to check the result. Questions
-are welcome on the [Maran Discord](https://discord.gg/NfqTkyTgD).
+are welcome on the [Innovayse Discord](https://discord.gg/NfqTkyTgD).
 
 The rules in [`rules/`](rules/) are binding and mostly enforced by a command rather than by a
 reviewer's memory. Work branches from `dev` and merges back into it; `main` is the release
