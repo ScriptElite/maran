@@ -18,6 +18,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use maran_agent_core::agent_paths::AgentPaths;
+use maran_agent_core::utils::bound_exceeded::BoundExceeded;
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_agent_core::validation::web::domain::Domain;
 use maran_agent_core::validation::web::php_version::PhpVersion;
@@ -83,6 +85,23 @@ pub(crate) struct FakeSiteHost {
     /// A vhost that appears the moment its path is next READ, as a concurrent
     /// creation's write would: that read still answers "absent".
     appears_after_read: Mutex<Option<(PathBuf, String)>>,
+    /// The validator and the reload every write, creation, removal and batch
+    /// reload was handed, in call order.
+    protocol: Mutex<Vec<ProtocolCall>>,
+    /// Whether the validator outlives its deadline and is killed, so the host
+    /// answers with a bound instead of a verdict.
+    validation_times_out: Mutex<bool>,
+}
+
+/// One use of the config-write protocol, as the operation shaped it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProtocolCall {
+    /// The validator, as `(program, arguments)`.
+    pub(crate) validator: (String, Vec<String>),
+    /// The class the validator was given.
+    pub(crate) validator_class: CallClass,
+    /// The reload, as `(program, arguments)`.
+    pub(crate) reload: (String, Vec<String>),
 }
 
 impl FakeSiteHost {
@@ -103,7 +122,43 @@ impl FakeSiteHost {
             create_validators: Mutex::new(Vec::new()),
             create_reloads: Mutex::new(Vec::new()),
             appears_after_read: Mutex::new(None),
+            protocol: Mutex::new(Vec::new()),
+            validation_times_out: Mutex::new(false),
         }
+    }
+
+    /// Makes the validator outlive its deadline: every write, creation, removal
+    /// and batch reload then ends in a bound.
+    pub(crate) fn time_out_validation(&self) {
+        *self.validation_times_out.lock().unwrap() = true;
+    }
+
+    /// The validator and the reload every protocol use was handed, in order.
+    pub(crate) fn protocol(&self) -> Vec<ProtocolCall> {
+        self.protocol.lock().unwrap().clone()
+    }
+
+    /// Records what the operation handed the protocol, then reports the bound
+    /// when the validator is set to outlive its deadline.
+    fn enter_protocol(
+        &self,
+        validator: &Validator<'_>,
+        reload: &Reload<'_>,
+    ) -> Result<(), SitesOpError> {
+        self.protocol.lock().unwrap().push(ProtocolCall {
+            validator: command_line(validator.program.as_str(), validator.arguments),
+            validator_class: validator.class,
+            reload: command_line(reload.program.as_str(), reload.arguments),
+        });
+
+        if *self.validation_times_out.lock().unwrap() {
+            return Err(SitesOpError::Bound(BoundExceeded::TimedOut {
+                program: validator.program.to_string(),
+                deadline: validator.class.deadline(),
+            }));
+        }
+
+        Ok(())
     }
 
     /// Arranges for `contents` to appear at `path` right after the next read
@@ -238,13 +293,14 @@ impl SiteHost for FakeSiteHost {
         &self,
         target: &Path,
         contents: &str,
-        _validator: &Validator<'_>,
-        _reload: &Reload<'_>,
+        validator: &Validator<'_>,
+        reload: &Reload<'_>,
     ) -> Result<(), SitesOpError> {
         self.replaced_targets
             .lock()
             .unwrap()
             .push(target.to_path_buf());
+        self.enter_protocol(validator, reload)?;
 
         self.accept(target, contents)
     }
@@ -269,14 +325,15 @@ impl SiteHost for FakeSiteHost {
             .lock()
             .unwrap()
             .push(refused_warnings.to_vec());
-        self.create_validators
-            .lock()
-            .unwrap()
-            .push(command_line(validator.program, validator.arguments));
+        self.create_validators.lock().unwrap().push(command_line(
+            validator.program.as_str(),
+            validator.arguments,
+        ));
         self.create_reloads
             .lock()
             .unwrap()
-            .push(command_line(reload.program, reload.arguments));
+            .push(command_line(reload.program.as_str(), reload.arguments));
+        self.enter_protocol(validator, reload)?;
 
         if self.files.lock().unwrap().contains_key(target) {
             *self.writes.lock().unwrap() += 1;
@@ -292,10 +349,11 @@ impl SiteHost for FakeSiteHost {
     fn remove_config(
         &self,
         target: &Path,
-        _validator: &Validator<'_>,
-        _reload: &Reload<'_>,
+        validator: &Validator<'_>,
+        reload: &Reload<'_>,
     ) -> Result<(), SitesOpError> {
         *self.writes.lock().unwrap() += 1;
+        self.enter_protocol(validator, reload)?;
         self.files.lock().unwrap().remove(target);
         Ok(())
     }
@@ -343,10 +401,11 @@ impl SiteMaintenanceHost for FakeSiteHost {
     /// so one `reject_validation` call governs both.
     fn validate_and_reload(
         &self,
-        _validator: &Validator<'_>,
-        _reload: &Reload<'_>,
+        validator: &Validator<'_>,
+        reload: &Reload<'_>,
     ) -> Result<(), SitesOpError> {
         *self.writes.lock().unwrap() += 1;
+        self.enter_protocol(validator, reload)?;
 
         let (status, stderr) = self.validation.lock().unwrap().clone();
         if status == 0 {

@@ -9,6 +9,8 @@
 
 use std::sync::Mutex;
 
+use maran_agent_core::utils::bound_exceeded::BoundExceeded;
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::web::php_version::PhpVersion;
 use maran_distro::{DistroAdapter, DistroFamily, adapter_for};
 
@@ -97,13 +99,14 @@ fn installing_starts_the_install_unit_named_after_the_adapters_package_as_an_arg
     assert_eq!(
         host.commands()[0],
         vec![
-            distro().service_manager().to_owned(),
+            distro().service_manager().to_string(),
             "start".to_owned(),
+            "--".to_owned(),
             unit_for(&distro().php_package("8.3")),
         ]
     );
     assert_eq!(
-        host.commands()[0][2],
+        host.commands()[0][3],
         "maran-php-install@php8.3-fpm.service"
     );
 }
@@ -120,8 +123,9 @@ fn the_install_unit_name_follows_the_rhel_adapter_too() {
     assert_eq!(
         host.commands()[0],
         vec![
-            rhel.service_manager().to_owned(),
+            rhel.service_manager().to_string(),
             "start".to_owned(),
+            "--".to_owned(),
             "maran-php-install@php83-php-fpm.service".to_owned(),
         ]
     );
@@ -253,7 +257,7 @@ fn every_instance_the_agent_can_produce_is_a_plain_unit_name() {
             host.installs_on_start(version);
             install_reporting(&host, adapter, version).0.unwrap();
 
-            let unit = host.commands()[0][2].clone();
+            let unit = host.commands()[0][3].clone();
             let instance = unit
                 .strip_prefix("maran-php-install@")
                 .and_then(|rest| rest.strip_suffix(".service"))
@@ -286,9 +290,10 @@ fn the_service_is_enabled_and_started_after_the_package_lands() {
     assert_eq!(
         host.commands()[1],
         vec![
-            distro().service_manager().to_owned(),
+            distro().service_manager().to_string(),
             "enable".to_owned(),
             "--now".to_owned(),
+            "--".to_owned(),
             distro().php_fpm_service("8.3"),
         ]
     );
@@ -373,4 +378,48 @@ fn a_package_manager_refusal_is_reported_with_its_output() {
         Err(PhpOpError::PackageManager { stderr }) => assert!(stderr.contains("Unable to locate")),
         other => panic!("expected PackageManager, got {other:?}"),
     }
+}
+
+#[test]
+fn a_package_install_that_times_out_is_a_bound_not_a_package_manager_failure() {
+    // The install unit lives in the service manager and keeps running after the agent
+    // stops waiting, so the version may still appear. `PackageManager` would say it
+    // did not install, which is exactly what a killed client cannot know.
+    let host = FakePhpHost::empty();
+    host.time_out("start");
+
+    match install(&host, "8.3") {
+        Err(PhpOpError::Bound(bound)) => {
+            assert!(matches!(bound, BoundExceeded::TimedOut { .. }), "{bound:?}");
+        }
+        other => panic!("expected Bound, got {other:?}"),
+    }
+    assert_eq!(host.commands().len(), 1, "the enable step is never reached");
+}
+
+#[test]
+fn an_enable_that_times_out_is_a_bound_not_a_service_enable_failure() {
+    let host = FakePhpHost::empty();
+    host.installs_on_start("8.3");
+    host.time_out("enable");
+
+    match install(&host, "8.3") {
+        Err(PhpOpError::Bound(_)) => {}
+        other => panic!("expected Bound, got {other:?}"),
+    }
+}
+
+#[test]
+fn installing_php_runs_the_package_manager_in_the_package_install_class() {
+    // `PackageInstall` is the one class sized for a blocking oneshot unit of up to 1800 s.
+    // The enable that follows is a service-manager change and runs as a reload.
+    let host = FakePhpHost::empty();
+    host.installs_on_start("8.3");
+
+    install(&host, "8.3").unwrap();
+
+    assert_eq!(
+        host.classes(),
+        vec![CallClass::PackageInstall, CallClass::Reload]
+    );
 }

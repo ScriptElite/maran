@@ -1,5 +1,7 @@
 //! Failures of the multi-PHP operations.
 
+use maran_agent_core::utils::bound_exceeded::BoundExceeded;
+
 use crate::safe_write::SafeWriteError;
 
 /// What can go wrong while listing, installing, or configuring a PHP version.
@@ -127,6 +129,20 @@ pub enum PhpOpError {
         stderr: String,
     },
 
+    /// A program this area ran (`php-fpm -t`, `systemctl …`) outlived its
+    /// deadline or its output ceiling and was killed with its whole process
+    /// group.
+    ///
+    /// **Not a verdict**, and so never a [`Self::PoolValidation`], a
+    /// [`Self::ReloadFailed`], a [`Self::PackageManager`], a
+    /// [`Self::ServiceEnable`] or a [`Self::ConfigWrite`]: the program was
+    /// stopped before it could answer. For the install unit it is the sharpest
+    /// case, because the unit lives in the service manager and keeps running
+    /// after the agent stops waiting, so the version may still appear. Carries
+    /// the program's path and the bound and never a byte the program printed.
+    #[error(transparent)]
+    Bound(#[from] BoundExceeded),
+
     /// The pool file could not be written or swapped in — every failure of the
     /// write protocol that is not a validation or reload refusal.
     #[error("failed to write the php-fpm pool: {reason}")]
@@ -178,16 +194,21 @@ impl From<SafeWriteError> for PhpOpError {
     ///
     /// The two failures an operator acts on differently — php-fpm refusing the
     /// content, and php-fpm refusing to reload valid content — keep their own
-    /// variants and their tool output; everything else collapses into
-    /// [`PhpOpError::ConfigWrite`], whose `Display` still carries the original
+    /// variants and their tool output, and a bound stays [`PhpOpError::Bound`];
+    /// everything else collapses into [`PhpOpError::ConfigWrite`], whose `Display` still carries the original
     /// chain, including a rollback that did not happen.
     fn from(error: SafeWriteError) -> Self {
         match error {
             SafeWriteError::ValidationFailed { stderr } => Self::PoolValidation { stderr },
             SafeWriteError::ReloadFailed { stderr } => Self::ReloadFailed { stderr },
+            SafeWriteError::Bound(bound) => Self::Bound(bound),
             other => Self::ConfigWrite {
                 reason: other.to_string(),
             },
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/php/php_op_error_tests.rs"]
+mod tests;

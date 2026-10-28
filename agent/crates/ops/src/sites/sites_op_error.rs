@@ -1,6 +1,7 @@
 //! Failures of the site operations.
 
 use maran_agent_core::privs::priv_error::PrivError;
+use maran_agent_core::utils::bound_exceeded::BoundExceeded;
 use maran_agent_core::validation::fs::path_error::PathError;
 
 use crate::safe_write::SafeWriteError;
@@ -154,6 +155,19 @@ pub enum SitesOpError {
         version: String,
     },
 
+    /// A program this area ran (`nginx -t`, `systemctl reload`, …) outlived its
+    /// deadline or its output ceiling and was killed with its whole process group.
+    ///
+    /// **Not a verdict**, and so never a [`SitesOpError::NginxValidation`], a
+    /// [`SitesOpError::ReloadFailed`] or a [`SitesOpError::ConfigWrite`]: the
+    /// program was stopped before it could answer, and a reload that was killed
+    /// may still have taken effect. Whatever the operation had written has been
+    /// put back by the config-write protocol, as for any other failed step.
+    /// Carries the program's path and the bound and never a byte the program
+    /// printed.
+    #[error(transparent)]
+    Bound(#[from] BoundExceeded),
+
     /// The vhost directory could not be read.
     #[error("could not read the site configuration at {path}")]
     ConfigUnreadable {
@@ -182,13 +196,15 @@ impl From<SafeWriteError> for SitesOpError {
     /// refusals, which both become [`SitesOpError::ServerNameTaken`]: in this
     /// area the only creation is a vhost, the only warning it refuses is nginx
     /// reporting a host name served twice, and an existing target is the
-    /// site's own domain already served. Everything else collapses into
+    /// site's own domain already served. A bound stays a bound, because it
+    /// states no verdict on the content. Everything else collapses into
     /// [`SitesOpError::ConfigWrite`], whose `Display` still carries the
     /// original chain, including a rollback that did not happen.
     fn from(error: SafeWriteError) -> Self {
         match error {
             SafeWriteError::ValidationFailed { stderr } => Self::NginxValidation { stderr },
             SafeWriteError::ReloadFailed { stderr } => Self::ReloadFailed { stderr },
+            SafeWriteError::Bound(bound) => Self::Bound(bound),
             SafeWriteError::TargetExists { target } => Self::ServerNameTaken {
                 detail: format!("a vhost already exists at {target}"),
                 stderr: String::new(),
@@ -229,8 +245,8 @@ impl From<crate::php::PhpOpError> for SitesOpError {
     ///
     /// The two an operator acts on differently keep their meaning — a missing
     /// version stays [`SitesOpError::PhpVersionNotInstalled`], and php-fpm
-    /// refusing to reload a valid pool stays [`SitesOpError::ReloadFailed`] —
-    /// and everything else collapses into [`SitesOpError::ConfigWrite`], whose
+    /// refusing to reload a valid pool stays [`SitesOpError::ReloadFailed`], and
+    /// a bound stays [`SitesOpError::Bound`] — and everything else collapses into [`SitesOpError::ConfigWrite`], whose
     /// `Display` still carries the original message. The areas do not import
     /// each other's errors any further than this one conversion: a site
     /// operation reports site failures, whatever it had to call to fail.
@@ -240,9 +256,14 @@ impl From<crate::php::PhpOpError> for SitesOpError {
                 Self::PhpVersionNotInstalled { version }
             }
             crate::php::PhpOpError::ReloadFailed { stderr } => Self::ReloadFailed { stderr },
+            crate::php::PhpOpError::Bound(bound) => Self::Bound(bound),
             other => Self::ConfigWrite {
                 reason: other.to_string(),
             },
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/sites/sites_op_error_tests.rs"]
+mod tests;

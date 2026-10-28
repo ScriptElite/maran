@@ -14,6 +14,8 @@
 
 use std::path::Path;
 
+use maran_agent_core::utils::call_class::CallClass;
+
 use super::create_vhost;
 use crate::sites::SitesOpError;
 use crate::sites::fake_site_host::{FakeSiteHost, distro};
@@ -91,13 +93,17 @@ fn a_new_vhost_is_validated_with_nginx_t_and_reloaded_through_the_service_manage
 
     assert_eq!(
         host.create_validators(),
-        vec![(distro().nginx_binary().to_owned(), vec!["-t".to_owned()])]
+        vec![(distro().nginx_binary().to_string(), vec!["-t".to_owned()])]
     );
     assert_eq!(
         host.create_reloads(),
         vec![(
-            distro().service_manager().to_owned(),
-            vec!["reload".to_owned(), distro().nginx_service().to_owned()]
+            distro().service_manager().to_string(),
+            vec![
+                "reload".to_owned(),
+                "--".to_owned(),
+                distro().nginx_service().to_owned()
+            ]
         )]
     );
 }
@@ -144,4 +150,47 @@ fn a_vhost_that_is_already_there_is_refused_as_a_taken_name_and_not_overwritten(
         host.config(Path::new(TARGET)).as_deref(),
         Some("the first site's vhost\n")
     );
+}
+
+#[test]
+fn a_new_vhost_runs_the_validator_in_the_short_class() {
+    let host = FakeSiteHost::passing();
+
+    create_vhost(
+        &host,
+        distro(),
+        Path::new(TARGET),
+        "server {}\n",
+        &["shop.example"],
+    )
+    .unwrap();
+
+    let classes: Vec<CallClass> = host
+        .protocol()
+        .iter()
+        .map(|call| call.validator_class)
+        .collect();
+    assert_eq!(classes, vec![CallClass::Validate]);
+}
+
+#[test]
+fn a_new_vhost_whose_validator_times_out_reports_the_bound_and_never_a_taken_name() {
+    // A creation that was killed learned nothing about the names: `ServerNameTaken` or
+    // `NginxValidation` would send the customer to change a domain that nginx never read.
+    let host = FakeSiteHost::passing();
+    host.time_out_validation();
+
+    let refusal = create_vhost(
+        &host,
+        distro(),
+        Path::new(TARGET),
+        "server {}\n",
+        &["shop.example"],
+    );
+
+    assert!(
+        matches!(refusal, Err(SitesOpError::Bound(_))),
+        "expected Bound, got {refusal:?}"
+    );
+    assert_eq!(host.config(Path::new(TARGET)), None);
 }
