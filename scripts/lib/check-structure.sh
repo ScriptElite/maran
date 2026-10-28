@@ -1176,6 +1176,81 @@ else
     || report "installer/uninstall.sh: does not remove /etc/systemd/system/${php_unit_template}, which the installer drops — an uninstall would leave an unmanaged root package-install unit behind (issue #93)"
 fi
 
+# 28-30. The FTPS unit keeps its documented rejections off, its capability bound enumerated, and
+# its start line what the harness runs (issue #92).
+#
+# maran-ftps.service is the root process that listens on the internet. Its hardening is measured
+# directive by directive in the threat note's outcomes table, and the unit's own comment names the
+# five directives kept off (ProtectSystem=strict, ProtectHome, PrivateTmp, NoNewPrivileges,
+# RestrictNamespaces). They are kept off by the owner's scope, see the note's "What stays off, and
+# why"; RestrictNamespaces would also silently disable session isolation. The same edit could widen the
+# capability bound to the kernel-level capabilities, or leak a harness drop-in into the shipped
+# unit. This reads the text of the unit, comments stripped and continuation lines joined.
+# Blind spot, stated: text, not runtime. A key systemd ignores, or a directive a container skips,
+# is invisible here. Reading the manager's own answer back in the installer polygon is planned and
+# not yet present; the real-login measurement is the note's, not yet filled in.
+ftps_unit="installer/systemd/maran-ftps.service"
+# The unit's effective lines: comments dropped, backslash continuations joined, 'Key = value'
+# spacing normalised to 'Key=value' so a spaced form is counted like the plain one.
+ftps_effective() {
+  grep -vE '^[[:space:]]*#' | sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ba' -e '}' \
+    | sed -E 's/^[[:space:]]*([A-Za-z]+)[[:space:]]*=[[:space:]]*/\1=/'
+}
+# 28. Matches a banned rejection on stdin; prints each offending line.
+ftps_banned_rejections() {
+  grep -E '^[[:space:]]*((ProtectHome|NoNewPrivileges|PrivateTmp|RestrictNamespaces)[[:space:]]*=[[:space:]]*(yes|true|1|on)([[:space:]]|$)|ProtectSystem[[:space:]]*=[[:space:]]*strict)'
+}
+# 29. Prints every forbidden capability named on a CapabilityBoundingSet line on stdin.
+ftps_forbidden_caps() {
+  grep -E '^[[:space:]]*CapabilityBoundingSet[[:space:]]*=' \
+    | grep -oE 'CAP_(SYS_MODULE|SYS_RAWIO|SYS_PTRACE|SYS_BOOT|MKNOD|NET_ADMIN|NET_RAW|SYS_TIME|BPF)\b'
+}
+if [ ! -f "$ftps_unit" ]; then
+  report "scripts/lib/check-structure.sh: checks 28-30 found no ${ftps_unit}, so they are not a statement about the FTPS unit (rules/testing.md)"
+else
+  ftps_text="$(ftps_effective < "$ftps_unit")"
+  if ! printf '%s\n' "$ftps_text" | grep -qE '^\[Service\]$' \
+     || ! printf '%s\n' "$ftps_text" | grep -qE '^ExecStart='; then
+    report "${ftps_unit}: has no [Service] section or no ExecStart= line after comments are stripped, so checks 28-30 read nothing (rules/testing.md)"
+  fi
+  # Positive controls: each matcher must find a planted violation, or it is blind.
+  printf 'ProtectHome=yes\n' | ftps_banned_rejections >/dev/null \
+    || report "scripts/lib/check-structure.sh: check 28's matcher did not find a planted ProtectHome=yes, so it is blind (rules/testing.md)"
+  printf 'ProtectSystem=strict\n' | ftps_banned_rejections >/dev/null \
+    || report "scripts/lib/check-structure.sh: check 28's matcher did not find a planted ProtectSystem=strict, so it is blind (rules/testing.md)"
+  printf 'CapabilityBoundingSet=CAP_SETUID CAP_SYS_MODULE\n' | ftps_forbidden_caps >/dev/null \
+    || report "scripts/lib/check-structure.sh: check 29's matcher did not find a planted CAP_SYS_MODULE, so it is blind (rules/testing.md)"
+
+  # 28. The documented rejections stay off.
+  while IFS= read -r line; do
+    [ -n "$line" ] && report "${ftps_unit}: '${line}' — weighed and rejected for this daemon, see the threat note's \"What stays off, and why\" (issue #92)"
+  done < <(printf '%s\n' "$ftps_text" | ftps_banned_rejections)
+
+  # 29. The capability bound is one positive, non-empty line naming none of the kernel-level set.
+  caps_lines="$(printf '%s\n' "$ftps_text" | grep -cE '^[[:space:]]*CapabilityBoundingSet[[:space:]]*=')"
+  if [ "$caps_lines" -ne 1 ]; then
+    report "${ftps_unit}: has ${caps_lines} CapabilityBoundingSet= lines, expected exactly 1 — absent means the full root set, and several lines are merged (issue #92)"
+  fi
+  if printf '%s\n' "$ftps_text" | grep -qE '^[[:space:]]*CapabilityBoundingSet[[:space:]]*=[[:space:]]*(~|$)'; then
+    report "${ftps_unit}: CapabilityBoundingSet= is empty or a negated list, expected an enumerated positive set (issue #92)"
+  fi
+  while IFS= read -r cap; do
+    [ -n "$cap" ] && report "${ftps_unit}: CapabilityBoundingSet= names ${cap}, a kernel-level capability vsftpd has no use for (issue #92)"
+  done < <(printf '%s\n' "$ftps_text" | ftps_forbidden_caps)
+
+  # 30. The start line is the harness's, with no extra exec hooks and no unreplaced token.
+  want_exec='ExecStart=/usr/sbin/vsftpd /etc/maran/vsftpd/vsftpd.conf -obackground=NO'
+  [ "$(printf '%s\n' "$ftps_text" | grep -c '^ExecStart=')" -eq 1 ] \
+    && printf '%s\n' "$ftps_text" | grep -qxF "$want_exec" \
+    || report "${ftps_unit}: ExecStart= is not exactly one line '${want_exec}', which the polygon runs directly (issue #92)"
+  if printf '%s\n' "$ftps_text" | grep -qE '^(ExecStartPre|ExecStartPost|ExecStop|ExecReload)[[:space:]]*='; then
+    report "${ftps_unit}: carries an ExecStartPre/ExecStartPost/ExecStop/ExecReload hook, which the shipped unit must not (issue #92)"
+  fi
+  if printf '%s\n' "$ftps_text" | grep -qE '__[A-Z_]+__'; then
+    report "${ftps_unit}: carries an unreplaced __TOKEN__ placeholder, and nothing renders this unit (issue #92)"
+  fi
+fi
+
 if [ "$violations" -gt 0 ]; then
   echo
   echo "$violations structural violation(s). See rules/ for the rule each one cites."
