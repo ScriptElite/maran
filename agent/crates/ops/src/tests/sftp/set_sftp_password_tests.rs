@@ -2,6 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::secrets::password::Password;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_agent_core::validation::system::sftp_user_name::SftpUserName;
@@ -450,4 +451,61 @@ fn the_refusal_for_an_unmanaged_account_does_not_name_which_check_failed() {
 
     assert_eq!(format!("{reserved:?}"), format!("{wrong_home:?}"));
     assert_eq!(reserved.to_string(), wrong_home.to_string());
+}
+
+/// Each tool of the password change runs in the class of what it does.
+#[test]
+fn the_password_change_reads_as_a_query_and_writes_and_relocks_as_mutations() {
+    let host = host_with_the_login().with_locked("alice_web");
+
+    set_sftp_password_under_lock(&host, distro(), &web_user(), &new_password()).expect("set");
+
+    for spawn in host.spawns() {
+        let expected = if spawn.argv[0].ends_with("getent") {
+            CallClass::Query
+        } else {
+            CallClass::Mutation
+        };
+        assert_eq!(spawn.class, expected, "{:?}", spawn.argv);
+    }
+    assert!(
+        host.spawn_of("usermod").is_some(),
+        "the lock was restored, or the loop above did not cover the re-lock"
+    );
+}
+
+/// `getent` and `usermod` put the login after the marker.
+#[test]
+fn getent_and_usermod_receive_the_end_of_options_marker_before_their_operands() {
+    let host = host_with_the_login().with_locked("alice_web");
+
+    set_sftp_password_under_lock(&host, distro(), &web_user(), &new_password()).expect("set");
+
+    let getent = host.spawn_of("getent").expect("getent was run").argv;
+    assert_eq!(
+        getent[1..],
+        ["--", "shadow", "alice_web"].map(str::to_owned),
+        "{getent:?}"
+    );
+    let usermod = host.spawn_of("usermod").expect("usermod was run").argv;
+    assert_eq!(
+        usermod[1..],
+        ["--lock", "--", "alice_web"].map(str::to_owned),
+        "{usermod:?}"
+    );
+    // Inverse control: `chpasswd` takes no operand at all, so it gets no marker.
+    let chpasswd = host.spawn_of("chpasswd").expect("chpasswd was run").argv;
+    assert_eq!(chpasswd.len(), 1, "{chpasswd:?}");
+}
+
+/// A `chpasswd` that outruns its deadline is not a rejected password.
+#[test]
+fn a_chpasswd_that_times_out_is_a_bound_and_not_a_rejected_password() {
+    let host = host_with_the_login();
+    host.time_out("chpasswd");
+
+    let error = set_sftp_password_under_lock(&host, distro(), &web_user(), &new_password())
+        .expect_err("must fail");
+
+    assert!(matches!(error, SftpError::Bound(_)), "got {error:?}");
 }

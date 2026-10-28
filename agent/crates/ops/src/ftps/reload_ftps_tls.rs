@@ -1,6 +1,8 @@
 //! Making a running FTPS daemon pick up certificate material that was replaced
 //! underneath it.
 
+use maran_agent_core::agent_paths::AgentPaths;
+use maran_agent_core::utils::call_class::CallClass;
 use maran_distro::adapter::DistroAdapter;
 
 use crate::ftps::ftps_error::FtpsError;
@@ -39,7 +41,9 @@ use crate::ftps::model::ftps_unit::FtpsUnit;
 /// and the control port has stopped answering — which is the shape a certificate
 /// whose key does not match produces, since it parses perfectly and dies at the
 /// first handshake. Returns [`FtpsError::SpawnFailed`] when the service manager
-/// cannot be started at all, and [`FtpsError::ConfigUnreadable`] when the live
+/// cannot be started at all, [`FtpsError::Bound`] when the restart outruns its
+/// deadline (the unit's state is then unknown, which is reported as that and not
+/// as a refusal), and [`FtpsError::ConfigUnreadable`] when the live
 /// configuration exists and cannot be read while the state is observed.
 pub fn reload_ftps_tls(
     host: &dyn FtpsHost,
@@ -50,17 +54,21 @@ pub fn reload_ftps_tls(
         return Ok(before);
     }
 
-    let restarted = host.run(distro.service_manager(), &FtpsUnit::RESTART)?;
+    let restarted = host.run(
+        &distro.service_manager(),
+        &FtpsUnit::RESTART,
+        CallClass::Reload,
+    )?;
     if restarted.status != 0 {
         return Err(FtpsError::ServiceRefused {
-            unit: FtpsUnit::RESTART[1].to_owned(),
+            unit: AgentPaths::FTPS_UNIT.to_owned(),
         });
     }
 
     let after = get_ftps_status(host, distro, None)?;
     if !after.running {
         return Err(FtpsError::ServiceRefused {
-            unit: FtpsUnit::RESTART[1].to_owned(),
+            unit: AgentPaths::FTPS_UNIT.to_owned(),
         });
     }
     if !after.control_port_answered {

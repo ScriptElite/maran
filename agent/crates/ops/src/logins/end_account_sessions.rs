@@ -1,5 +1,6 @@
 //! Ending the transfer sessions a suspended account already has open.
 
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::system::managed_account::ManagedAccount;
 use maran_distro::DistroAdapter;
 
@@ -122,6 +123,8 @@ const NOTHING_MATCHED: i32 = 1;
 /// # Errors
 ///
 /// - [`LoginsError::SpawnFailed`] when `pkill` could not be started at all.
+/// - [`LoginsError::Bound`] when `pkill` outran its deadline. How many processes
+///   were signalled is then unknown, which is why this is an error and not zero.
 /// - [`LoginsError::SessionCullFailed`] when `pkill` answered with anything but
 ///   "signalled" or "nothing matched". Some of the account's processes may have
 ///   been signalled and some may not, which is why this is an error and not a
@@ -132,9 +135,12 @@ pub(crate) fn end_account_sessions(
     account: &ManagedAccount,
 ) -> Result<u32, LoginsError> {
     let uid = account.uid().to_string();
+    // No end-of-options marker: the numeric uid is the argument of `--uid`, so
+    // no operand follows and there is nothing for a marker to protect.
     let outcome = host.run(
-        distro.pkill_binary(),
+        &distro.pkill_binary(),
         &[SIGNAL_FLAG, KILL_SIGNAL, COUNT_FLAG, UID_FLAG, &uid],
+        CallClass::Mutation,
     )?;
 
     match outcome.status {

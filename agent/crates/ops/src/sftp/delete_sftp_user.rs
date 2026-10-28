@@ -1,5 +1,6 @@
 //! DeleteSftpUser: the login only, never the files behind it.
 
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_agent_core::validation::system::sftp_user_name::SftpUserName;
 use maran_distro::DistroAdapter;
@@ -8,6 +9,7 @@ use crate::accounts::take_account_lock;
 use crate::sftp::model::account_jail::AccountJail;
 use crate::sftp::sftp_error::SftpError;
 use crate::sftp::sftp_host::SftpHost;
+use maran_agent_core::end_of_options::END_OF_OPTIONS;
 
 /// Removes the system login `user`.
 ///
@@ -101,6 +103,8 @@ use crate::sftp::sftp_host::SftpHost;
 ///   it names belongs to somebody else.
 /// - [`SftpError::SpawnFailed`] when `userdel` refuses for any other reason, or
 ///   could not be run at all, and when the password database cannot be read.
+/// - [`SftpError::Bound`] when `userdel` outran its deadline. Whether the login
+///   is gone is then unknown, and a repeat converges on `NotFound` if it is.
 pub fn delete_sftp_user(
     host: &dyn SftpHost,
     distro: &dyn DistroAdapter,
@@ -140,12 +144,23 @@ pub fn delete_sftp_user(
 /// - [`SftpError::NotFound`] when `userdel` reports no such login.
 /// - [`SftpError::SpawnFailed`] when `userdel` refuses for any other reason, or
 ///   could not be run at all.
+/// - [`SftpError::Bound`] when `userdel` outran its deadline. Whether the login
+///   is gone is then unknown, and a repeat converges on `NotFound` if it is.
 pub(crate) fn delete_sftp_user_under_lock(
     host: &dyn SftpHost,
     distro: &dyn DistroAdapter,
     user: &SftpUserName,
 ) -> Result<(), SftpError> {
-    let outcome = host.run(distro.userdel_binary(), &[user.as_str()], None)?;
+    // No `--remove`: the jail is root-owned and the home belongs to the account,
+    // so this is a single-entry edit of the password database, `Mutation`
+    // rather than `Bulk`. `userdel` parses with `getopt_long`, which honours the
+    // end-of-options marker on both families.
+    let outcome = host.run(
+        &distro.userdel_binary(),
+        &[END_OF_OPTIONS, user.as_str()],
+        None,
+        CallClass::Mutation,
+    )?;
     if outcome.status != 0 {
         return Err(SftpError::from_userdel(outcome.status));
     }

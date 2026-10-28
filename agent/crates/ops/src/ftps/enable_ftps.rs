@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use maran_agent_core::agent_paths::AgentPaths;
+use maran_agent_core::utils::call_class::CallClass;
 use maran_distro::adapter::DistroAdapter;
 use maran_templates::vsftpd::vsftpd_daemon_config::VsftpdDaemonConfig;
 
@@ -147,7 +148,10 @@ const FTPS_LOG_PATH: &str = "/var/log/maran/ftps.log";
 /// port stays silent — both with the previous configuration restored and the
 /// daemon restarted on it. Returns [`FtpsError::Render`],
 /// [`FtpsError::ConfigUnreadable`], [`FtpsError::ConfigWrite`] and
-/// [`FtpsError::SpawnFailed`] for the mechanical failures they name.
+/// [`FtpsError::SpawnFailed`] for the mechanical failures they name. Returns
+/// [`FtpsError::Bound`] when the candidate daemon, the restart or the status
+/// check outruns its deadline; the configuration is then restored exactly as for
+/// a refusal, but the error says the agent did not get an answer.
 pub fn enable_ftps(
     host: &dyn FtpsHost,
     distro: &dyn DistroAdapter,
@@ -187,12 +191,16 @@ pub fn enable_ftps(
     // `is-active` is therefore a second, genuinely different question, not a
     // restatement of the first. Both are steps the protocol restores the previous
     // content on, which is exactly the behaviour wanted for each.
+    let service_manager = distro.service_manager();
     let daemon_reads_the_file = Validator {
-        program: distro.service_manager(),
+        program: &service_manager,
         arguments: &FtpsUnit::RESTART,
+        // A restart changes the service manager's state, so it is a `Reload`
+        // and not a pure validation.
+        class: CallClass::Reload,
     };
     let the_unit_is_still_up = Reload {
-        program: distro.service_manager(),
+        program: &service_manager,
         arguments: &FtpsUnit::IS_ACTIVE,
     };
 
@@ -278,7 +286,11 @@ fn restart_on_the_restored_file(
     distro: &dyn DistroAdapter,
     original: &FtpsError,
 ) {
-    if let Err(failed) = host.run(distro.service_manager(), &FtpsUnit::RESTART) {
+    if let Err(failed) = host.run(
+        &distro.service_manager(),
+        &FtpsUnit::RESTART,
+        CallClass::Reload,
+    ) {
         tracing::error!(
             original = %original,
             rollback = %failed,
@@ -346,21 +358,23 @@ fn restore_previous(
     }
 
     let original = FtpsError::NotListening;
+    let service_manager = distro.service_manager();
     let outcome = match previous {
         Some(bytes) => host.write_config(
             Path::new(AgentPaths::VSFTPD_CONFIG_PATH),
             bytes,
             &Validator {
-                program: distro.service_manager(),
+                program: &service_manager,
                 arguments: &FtpsUnit::RESTART,
+                class: CallClass::Reload,
             },
             &Reload {
-                program: distro.service_manager(),
+                program: &service_manager,
                 arguments: &FtpsUnit::IS_ACTIVE,
             },
         ),
         None => host
-            .run(distro.service_manager(), &FtpsUnit::STOP)
+            .run(&service_manager, &FtpsUnit::STOP, CallClass::Reload)
             .map(|_| ()),
     };
 

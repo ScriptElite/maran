@@ -3,6 +3,8 @@
 // A failing assertion IS the reporting mechanism for a test.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use maran_agent_core::utils::call_class::CallClass;
+
 use crate::ftps::fake_ftps_host::{FakeFtpsHost, distro};
 use crate::ftps::ftps_error::FtpsError;
 use crate::ftps::reload_ftps_tls::reload_ftps_tls;
@@ -79,4 +81,29 @@ fn a_service_manager_that_cannot_be_started_is_an_error_and_never_a_quiet_no_op(
         reload_ftps_tls(&host, distro()).expect_err("no service manager"),
         FtpsError::program_unavailable()
     );
+}
+
+#[test]
+fn reloading_tls_restarts_in_the_reload_class() {
+    let host = FakeFtpsHost::with_certificate().with_running_daemon();
+
+    reload_ftps_tls(&host, distro()).expect("reloaded");
+
+    let restart = host
+        .spawns()
+        .into_iter()
+        .find(|spawn| spawn.argv.get(1).is_some_and(|verb| verb == "restart"))
+        .expect("the daemon was restarted");
+    assert_eq!(restart.class, Some(CallClass::Reload));
+}
+
+#[test]
+fn a_restart_that_times_out_is_a_bound_and_not_a_refusal() {
+    let host = FakeFtpsHost::with_certificate()
+        .with_running_daemon()
+        .timing_out("systemctl");
+
+    let failed = reload_ftps_tls(&host, distro()).expect_err("timed out");
+
+    assert!(matches!(failed, FtpsError::Bound(_)), "got {failed:?}");
 }

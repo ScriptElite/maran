@@ -11,6 +11,9 @@ use std::time::Duration;
 
 use maran_agent_core::agent_paths::AgentPaths;
 use maran_agent_core::command_outcome::CommandOutcome;
+use maran_agent_core::utils::bound_exceeded::BoundExceeded;
+use maran_agent_core::utils::call_class::CallClass;
+use maran_agent_core::utils::output_stream::OutputStream;
 use maran_agent_core::validation::secrets::password::Password;
 use maran_agent_core::validation::system::ftps_user_name::FtpsUserName;
 use maran_agent_core::validation::system::managed_account::ManagedAccount;
@@ -18,7 +21,7 @@ use maran_agent_core::validation::system::name::AccountName;
 use maran_agent_core::validation::web::domain::Domain;
 use maran_agent_core::validation::web::passive_address::PassiveAddress;
 use maran_agent_core::validation::web::port::Port;
-use maran_distro::{DistroAdapter, DistroFamily, adapter_for};
+use maran_distro::{AdapterBinary, DistroAdapter, DistroFamily, adapter_for};
 
 use crate::ftps::ftps_error::FtpsError;
 use crate::ftps::ftps_host::FtpsHost;
@@ -63,6 +66,10 @@ pub(crate) struct Spawn {
     /// test asserting that a password never reached an argument vector has to be
     /// able to see which spawn was given the pipe.
     pub(crate) stdin: Option<String>,
+    /// The call class the code asked the spawn for, which decides the deadline
+    /// the real host would have enforced; `None` for the candidate daemon,
+    /// whose end of window is a success and which has no class.
+    pub(crate) class: Option<CallClass>,
 }
 
 /// One system login the fake holds, as `useradd` left it.
@@ -195,6 +202,15 @@ pub(crate) struct FakeFtpsHost {
     /// which a spawn count cannot: an account with no jail and no unit reaches
     /// the end of its teardown without running a single program.
     login_enumerations: Mutex<usize>,
+    /// The program name (its last path component) that outruns its deadline,
+    /// when a test installed one. The spawn is recorded first, then fails with a
+    /// [`FtpsError::Bound`], as the real host fails after killing the group.
+    times_out: Option<String>,
+    /// Whether the config protocol's validator or reload outruns its deadline.
+    config_times_out: bool,
+    /// Whether the candidate daemon prints past the output ceiling, so that the
+    /// run ends in [`FtpsError::Bound`] and not in a verdict on the text.
+    candidate_floods: bool,
 }
 
 impl FakeFtpsHost {
@@ -239,6 +255,9 @@ impl FakeFtpsHost {
             usermod_status: 0,
             usermod_locks: true,
             login_enumerations: Mutex::new(0),
+            times_out: None,
+            config_times_out: false,
+            candidate_floods: false,
         }
     }
 
@@ -518,13 +537,32 @@ impl FakeFtpsHost {
     }
 
     /// Records `argv` and `stdin`.
-    fn record(&self, program: &str, arguments: &[&str], stdin: Option<&str>) {
+    fn record(
+        &self,
+        program: &str,
+        arguments: &[&str],
+        stdin: Option<&str>,
+        class: Option<CallClass>,
+    ) {
         let mut argv = vec![program.to_owned()];
         argv.extend(arguments.iter().map(|argument| (*argument).to_owned()));
         self.spawns.lock().unwrap().push(Spawn {
             argv,
             stdin: stdin.map(ToOwned::to_owned),
+            class,
         });
+    }
+
+    /// The bound a program that outran its deadline is reported with, when a
+    /// test made `program` do so.
+    fn bound_for(&self, program: &str, class: CallClass) -> Option<FtpsError> {
+        let name = self.times_out.as_deref()?;
+        program.ends_with(name).then(|| {
+            FtpsError::Bound(BoundExceeded::TimedOut {
+                program: program.to_owned(),
+                deadline: class.deadline(),
+            })
+        })
     }
 
     /// Answers a `useradd` the way the shadow suite would.
@@ -599,7 +637,7 @@ impl FakeFtpsHost {
             };
         }
 
-        let Some(name) = arguments.get(1) else {
+        let Some(name) = arguments.last() else {
             return refusal(GETENT_KEY_NOT_FOUND);
         };
         match self.shadow_field(name) {
@@ -620,7 +658,7 @@ impl FakeFtpsHost {
             return refusal(self.usermod_status);
         }
 
-        let Some(name) = arguments.get(1) else {
+        let Some(name) = arguments.last() else {
             return refusal(0);
         };
         if self.usermod_locks
@@ -715,6 +753,25 @@ impl FakeFtpsHost {
         self
     }
 
+    /// The program named `name` (`useradd`, `systemctl`, ...) outruns its
+    /// deadline.
+    pub(crate) fn timing_out(mut self, name: &str) -> Self {
+        self.times_out = Some(name.to_owned());
+        self
+    }
+
+    /// The candidate daemon prints past the output ceiling.
+    pub(crate) fn with_candidate_flooding(mut self) -> Self {
+        self.candidate_floods = true;
+        self
+    }
+
+    /// The config protocol's validator or reload outruns its deadline.
+    pub(crate) fn with_config_writes_timing_out(mut self) -> Self {
+        self.config_times_out = true;
+        self
+    }
+
     /// The service manager cannot be started at all.
     pub(crate) fn without_service_manager(mut self) -> Self {
         self.service_manager_available = false;
@@ -763,8 +820,13 @@ impl FakeFtpsHost {
     }
 
     /// Records `argv` and answers the way the service manager would.
-    fn service_manager_answer(&self, program: &str, arguments: &[&str]) -> CommandOutcome {
-        self.record(program, arguments, None);
+    fn service_manager_answer(
+        &self,
+        program: &str,
+        arguments: &[&str],
+        class: CallClass,
+    ) -> CommandOutcome {
+        self.record(program, arguments, None, Some(class));
 
         // A mount unit is answered on its own terms: the FTPS daemon's unit and
         // an account's `.mount` unit go to the same program, and conflating them
@@ -851,28 +913,53 @@ fn refusal(status: i32) -> CommandOutcome {
 }
 
 impl FtpsHost for FakeFtpsHost {
-    fn run(&self, program: &str, arguments: &[&str]) -> Result<CommandOutcome, FtpsError> {
-        if program == distro().useradd_binary() {
-            self.record(program, arguments, None);
+    fn run(
+        &self,
+        program: &AdapterBinary,
+        arguments: &[&str],
+        class: CallClass,
+    ) -> Result<CommandOutcome, FtpsError> {
+        let program = program.as_str();
+        if program == distro().useradd_binary().as_str() {
+            self.record(program, arguments, None, Some(class));
+            if let Some(bound) = self.bound_for(program, class) {
+                return Err(bound);
+            }
             return Ok(self.useradd_answer(arguments));
         }
-        if program == distro().userdel_binary() {
-            self.record(program, arguments, None);
+        if program == distro().userdel_binary().as_str() {
+            self.record(program, arguments, None, Some(class));
+            if let Some(bound) = self.bound_for(program, class) {
+                return Err(bound);
+            }
             return Ok(self.userdel_answer(arguments));
         }
-        if program == distro().getent_binary() {
-            self.record(program, arguments, None);
+        if program == distro().getent_binary().as_str() {
+            self.record(program, arguments, None, Some(class));
+            if let Some(bound) = self.bound_for(program, class) {
+                return Err(bound);
+            }
             return Ok(self.getent_answer(arguments));
         }
-        if program == distro().usermod_binary() {
-            self.record(program, arguments, None);
+        if program == distro().usermod_binary().as_str() {
+            self.record(program, arguments, None, Some(class));
+            if let Some(bound) = self.bound_for(program, class) {
+                return Err(bound);
+            }
             return Ok(self.usermod_answer(arguments));
         }
 
         if !self.service_manager_available {
             return Err(FtpsError::program_unavailable());
         }
-        Ok(self.service_manager_answer(program, arguments))
+        if let Some(bound) = self.bound_for(program, class) {
+            // Recorded, and then killed BEFORE it changed anything: a program the
+            // agent killed at its deadline has not been modelled as having done
+            // its work, so a mount the unit would have stopped is still up.
+            self.record(program, arguments, None, Some(class));
+            return Err(bound);
+        }
+        Ok(self.service_manager_answer(program, arguments, class))
     }
 
     fn read_config(&self, target: &Path) -> Result<Option<String>, FtpsError> {
@@ -947,15 +1034,25 @@ impl FtpsHost for FakeFtpsHost {
             }
         }
 
-        for (program, arguments) in [
-            (validator.program, validator.arguments),
-            (reload.program, reload.arguments),
+        for (program, arguments, class) in [
+            (validator.program, validator.arguments, validator.class),
+            (reload.program, reload.arguments, CallClass::Reload),
         ] {
             if !self.service_manager_available {
                 *self.live.lock().unwrap() = previous;
                 return Err(FtpsError::program_unavailable());
             }
-            if self.service_manager_answer(program, arguments).status != 0 {
+            let answer = self.service_manager_answer(program.as_str(), arguments, class);
+            if self.config_times_out {
+                // The protocol restores the previous content before it reports
+                // the bound, so the live file is back before the error is seen.
+                *self.live.lock().unwrap() = previous;
+                return Err(FtpsError::Bound(BoundExceeded::TimedOut {
+                    program: program.as_str().to_owned(),
+                    deadline: class.deadline(),
+                }));
+            }
+            if answer.status != 0 {
                 *self.live.lock().unwrap() = previous;
                 return Err(FtpsError::ServiceRefused {
                     unit: AgentPaths::FTPS_UNIT.to_owned(),
@@ -968,12 +1065,20 @@ impl FtpsHost for FakeFtpsHost {
 
     fn run_candidate(
         &self,
-        program: &str,
+        program: &AdapterBinary,
         _contents: &str,
         arguments: &[&str],
         _deadline: Duration,
     ) -> Result<CandidateOutcome, FtpsError> {
-        self.record(program, arguments, None);
+        self.record(program.as_str(), arguments, None, None);
+
+        if self.candidate_floods {
+            return Err(FtpsError::Bound(BoundExceeded::OutputTooLarge {
+                program: program.as_str().to_owned(),
+                stream: OutputStream::Stdout,
+                cap: 64 * 1024,
+            }));
+        }
 
         match &self.candidate_refusal {
             Some(output) => Ok(CandidateOutcome::Exited {
@@ -1008,11 +1113,16 @@ impl FtpsHost for FakeFtpsHost {
 
     fn run_with_stdin(
         &self,
-        program: &str,
+        program: &AdapterBinary,
         arguments: &[&str],
         stdin: &str,
+        class: CallClass,
     ) -> Result<CommandOutcome, FtpsError> {
-        self.record(program, arguments, Some(stdin));
+        let program = program.as_str();
+        self.record(program, arguments, Some(stdin), Some(class));
+        if let Some(bound) = self.bound_for(program, class) {
+            return Err(bound);
+        }
 
         if self.chpasswd_status == 0
             && let Some((name, _)) = stdin.trim_end_matches('\n').split_once(':')

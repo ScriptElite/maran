@@ -5,6 +5,7 @@
 // A failing assertion IS the reporting mechanism for a test.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::secrets::password::Password;
 use maran_agent_core::validation::system::ftps_user_name::FtpsUserName;
 
@@ -97,7 +98,7 @@ fn the_argument_vector_carries_the_program_and_nothing_else() {
         .expect("chpasswd ran");
     assert_eq!(
         spawn.argv,
-        vec![distro().chpasswd_binary().to_owned()],
+        vec![distro().chpasswd_binary().as_str().to_owned()],
         "a command line is readable through /proc by every local user on the host"
     );
 }
@@ -377,11 +378,11 @@ fn the_shadow_field_is_read_before_the_password_is_written_and_not_after() {
         .collect();
     let first_getent = programs
         .iter()
-        .position(|program| program == distro().getent_binary())
+        .position(|program| program == distro().getent_binary().as_str())
         .expect("getent ran");
     let chpasswd = programs
         .iter()
-        .position(|program| program == distro().chpasswd_binary())
+        .position(|program| program == distro().chpasswd_binary().as_str())
         .expect("chpasswd ran");
     assert!(
         first_getent < chpasswd,
@@ -547,4 +548,76 @@ fn the_ftps_refusal_for_an_unmanaged_account_does_not_name_which_check_failed() 
 
     assert_eq!(format!("{reserved:?}"), format!("{wrong_home:?}"));
     assert_eq!(reserved.to_string(), wrong_home.to_string());
+}
+
+#[test]
+fn the_password_change_reads_as_a_query_and_writes_and_relocks_as_mutations() {
+    let host = host_with_login("pwclass").with_shadow_field("pwclass_files", LOCKED_HASH);
+
+    set_ftps_password(
+        &host,
+        distro(),
+        &host.account_name(),
+        &login(&host),
+        &password(),
+    )
+    .expect("the password must be set");
+
+    let spawns = host.spawns();
+    for spawn in &spawns {
+        let expected = if spawn.argv[0].ends_with("getent") {
+            CallClass::Query
+        } else {
+            CallClass::Mutation
+        };
+        assert_eq!(spawn.class, Some(expected), "{:?}", spawn.argv);
+    }
+    assert!(
+        spawns
+            .iter()
+            .any(|spawn| spawn.argv[0].ends_with("usermod")),
+        "the lock was restored, or the loop above did not cover the re-lock"
+    );
+}
+
+#[test]
+fn getent_and_usermod_receive_the_end_of_options_marker_before_their_operands() {
+    let host = host_with_login("pwmarker").with_shadow_field("pwmarker_files", LOCKED_HASH);
+
+    set_ftps_password(
+        &host,
+        distro(),
+        &host.account_name(),
+        &login(&host),
+        &password(),
+    )
+    .expect("the password must be set");
+
+    let spawns = host.spawns();
+    let getent = spawns
+        .iter()
+        .find(|spawn| spawn.argv[0].ends_with("getent"))
+        .expect("getent ran");
+    assert_eq!(getent.argv[1..], ["--", "shadow", "pwmarker_files"]);
+    let usermod = spawns
+        .iter()
+        .find(|spawn| spawn.argv[0].ends_with("usermod"))
+        .expect("usermod ran");
+    assert_eq!(usermod.argv[1..], ["--lock", "--", "pwmarker_files"]);
+}
+
+#[test]
+fn a_chpasswd_that_times_out_is_a_bound_and_not_a_rejected_password() {
+    let host = host_with_login("pwtimeout").timing_out("chpasswd");
+
+    let error = set_ftps_password(
+        &host,
+        distro(),
+        &host.account_name(),
+        &login(&host),
+        &password(),
+    )
+    .expect_err("must fail");
+
+    assert!(matches!(error, FtpsError::Bound(_)), "got {error:?}");
 }

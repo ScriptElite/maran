@@ -22,11 +22,13 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use maran_agent_core::command_outcome::CommandOutcome;
+use maran_agent_core::utils::bound_exceeded::BoundExceeded;
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::secrets::password::Password;
 use maran_agent_core::validation::system::managed_account::ManagedAccount;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_agent_core::validation::system::sftp_user_name::SftpUserName;
-use maran_distro::{DistroAdapter, DistroFamily, adapter_for};
+use maran_distro::{AdapterBinary, DistroAdapter, DistroFamily, adapter_for};
 
 use crate::safe_write::model::{Reload, Validator};
 use crate::sftp::model::account_jail::AccountJail;
@@ -82,6 +84,9 @@ pub(crate) struct RecordedSpawn {
     pub(crate) argv: Vec<String>,
     /// Everything written to the program's standard input.
     pub(crate) stdin: String,
+    /// The call class the code asked the spawn for, which decides the deadline
+    /// the real host would have enforced.
+    pub(crate) class: CallClass,
 }
 
 /// One config file the fake was asked to write through the protocol.
@@ -93,6 +98,8 @@ pub(crate) struct RecordedConfig {
     pub(crate) contents: String,
     /// The validator's argument vector, the program first.
     pub(crate) validator: Vec<String>,
+    /// The call class the validator asked for.
+    pub(crate) validator_class: CallClass,
     /// The reload's argument vector, the program first.
     pub(crate) reload: Vec<String>,
 }
@@ -120,6 +127,12 @@ pub(crate) struct FakeSftpHost {
     chpasswd_status: Mutex<i32>,
     /// Whether writing a config file refuses.
     config_refuses: Mutex<bool>,
+    /// The program name (its last path component) that outruns its deadline,
+    /// when a test installed one. The spawn is recorded first, then fails with
+    /// a [`SftpError::Bound`], as the real host fails after killing the group.
+    times_out: Mutex<Option<String>>,
+    /// Whether the config protocol's validator or reload outruns its deadline.
+    config_times_out: Mutex<bool>,
     /// Whether the password database holds the hosting account.
     account_exists: Mutex<bool>,
     /// The paths the "host" holds — unit files and jail directories alike.
@@ -187,6 +200,8 @@ impl FakeSftpHost {
             configs: Mutex::new(Vec::new()),
             chpasswd_status: Mutex::new(0),
             config_refuses: Mutex::new(false),
+            times_out: Mutex::new(None),
+            config_times_out: Mutex::new(false),
             account_exists: Mutex::new(true),
             paths: Mutex::new(Vec::new()),
             unremovable: Mutex::new(Vec::new()),
@@ -205,6 +220,17 @@ impl FakeSftpHost {
             account_ids: Mutex::new((ACCOUNT_UID, ACCOUNT_GID)),
             account_home: Mutex::new(None),
         }
+    }
+
+    /// Makes the program named `name` (`useradd`, `systemctl`, ...) outrun its
+    /// deadline.
+    pub(crate) fn time_out(&self, name: &str) {
+        *self.times_out.lock().unwrap() = Some(name.to_owned());
+    }
+
+    /// Makes the config protocol's validator or reload outrun its deadline.
+    pub(crate) fn time_out_config_writes(&self) {
+        *self.config_times_out.lock().unwrap() = true;
     }
 
     /// Gives the hosting account's password row these ids.
@@ -529,14 +555,25 @@ impl SftpHost for FakeSftpHost {
     /// run anything and still pass.
     fn run(
         &self,
-        program: &str,
+        program: &AdapterBinary,
         arguments: &[&str],
         stdin: Option<&str>,
+        class: CallClass,
     ) -> Result<CommandOutcome, SftpError> {
+        let program = program.as_str();
         self.spawns.lock().unwrap().push(RecordedSpawn {
             argv: Self::command_of(program, arguments),
             stdin: stdin.unwrap_or_default().to_owned(),
+            class,
         });
+
+        let timed_out = self.times_out.lock().unwrap().clone();
+        if timed_out.is_some_and(|name| program.ends_with(name.as_str())) {
+            return Err(SftpError::Bound(BoundExceeded::TimedOut {
+                program: program.to_owned(),
+                deadline: class.deadline(),
+            }));
+        }
 
         let status = if program.ends_with("useradd") {
             // The login is the last argument, as it is for the real tool, and
@@ -724,6 +761,12 @@ impl SftpHost for FakeSftpHost {
         validator: &Validator<'_>,
         reload: &Reload<'_>,
     ) -> Result<(), SftpError> {
+        if *self.config_times_out.lock().unwrap() {
+            return Err(SftpError::Bound(BoundExceeded::TimedOut {
+                program: validator.program.as_str().to_owned(),
+                deadline: validator.class.deadline(),
+            }));
+        }
         if *self.config_refuses.lock().unwrap() {
             return Err(SftpError::JailFailed);
         }
@@ -731,8 +774,9 @@ impl SftpHost for FakeSftpHost {
         self.configs.lock().unwrap().push(RecordedConfig {
             target: target.display().to_string(),
             contents: contents.to_owned(),
-            validator: Self::command_of(validator.program, validator.arguments),
-            reload: Self::command_of(reload.program, reload.arguments),
+            validator: Self::command_of(validator.program.as_str(), validator.arguments),
+            validator_class: validator.class,
+            reload: Self::command_of(reload.program.as_str(), reload.arguments),
         });
 
         Ok(())

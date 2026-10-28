@@ -1,5 +1,6 @@
 //! DeleteFtpsUser: the login only, never the files behind it.
 
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::system::ftps_user_name::FtpsUserName;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_distro::DistroAdapter;
@@ -8,6 +9,7 @@ use crate::accounts::take_account_lock;
 use crate::ftps::ftps_error::FtpsError;
 use crate::ftps::ftps_host::FtpsHost;
 use crate::ftps::model::ftps_jail::FtpsJail;
+use maran_agent_core::end_of_options::END_OF_OPTIONS;
 
 /// Removes the system login `user`.
 ///
@@ -104,6 +106,8 @@ use crate::ftps::model::ftps_jail::FtpsJail;
 ///   all.
 /// - [`FtpsError::SpawnFailed`] when `userdel` refuses for any other reason, or
 ///   could not be run at all.
+/// - [`FtpsError::Bound`] when `userdel` outran its deadline. Whether the login
+///   is gone is then unknown, and a repeat converges on `NotFound` if it is.
 pub fn delete_ftps_user(
     host: &dyn FtpsHost,
     distro: &dyn DistroAdapter,
@@ -143,12 +147,21 @@ pub fn delete_ftps_user(
 /// - [`FtpsError::NotFound`] when `userdel` reports no such login.
 /// - [`FtpsError::SpawnFailed`] when `userdel` refuses for any other reason, or
 ///   could not be run at all.
+/// - [`FtpsError::Bound`] when `userdel` outran its deadline.
 pub(crate) fn delete_ftps_user_under_lock(
     host: &dyn FtpsHost,
     distro: &dyn DistroAdapter,
     user: &FtpsUserName,
 ) -> Result<(), FtpsError> {
-    let outcome = host.run(distro.userdel_binary(), &[user.as_str()])?;
+    // No `--remove`: the jail is root-owned and the home belongs to the account,
+    // so this is a single-entry edit of the password database, `Mutation`
+    // rather than `Bulk`. `userdel` parses with `getopt_long`, which honours the
+    // end-of-options marker on both families.
+    let outcome = host.run(
+        &distro.userdel_binary(),
+        &[END_OF_OPTIONS, user.as_str()],
+        CallClass::Mutation,
+    )?;
     if outcome.status != 0 {
         return Err(FtpsError::from_userdel(outcome.status));
     }

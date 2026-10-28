@@ -3,6 +3,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::system::name::AccountName;
 
 use crate::accounts::take_account_lock;
@@ -290,13 +291,15 @@ fn nothing_is_deleted_and_the_lock_is_turned_with_the_flag_that_keeps_the_hash()
         locks,
         vec![
             vec![
-                distro().usermod_binary().to_owned(),
+                distro().usermod_binary().as_str().to_owned(),
                 "--lock".to_owned(),
+                "--".to_owned(),
                 "alice_files".to_owned()
             ],
             vec![
-                distro().usermod_binary().to_owned(),
+                distro().usermod_binary().as_str().to_owned(),
                 "--lock".to_owned(),
+                "--".to_owned(),
                 "alice_web".to_owned()
             ],
         ]
@@ -591,4 +594,95 @@ fn a_hosting_account_passes_the_same_gate_that_refuses_the_rows_above() {
 
     assert!(!host.spawns().is_empty());
     assert!(host.running_processes().is_empty());
+}
+
+#[test]
+fn a_usermod_that_times_out_is_a_bound_and_never_a_spawn_failure() {
+    // A killed `usermod` has said neither "locked" nor "refused". Folding the
+    // kill into `SpawnFailed { code }` would invent an exit status the tool never
+    // returned.
+    let host = one_of_each();
+    host.time_out("usermod");
+
+    let outcome = set_account_logins_locked_under_lock(&host, distro(), &account(), true);
+
+    assert!(
+        matches!(outcome, Err(LoginsError::Bound(_))),
+        "got {outcome:?}"
+    );
+}
+
+#[test]
+fn a_passwd_status_read_that_times_out_is_a_bound() {
+    let host = one_of_each();
+    host.time_out("passwd");
+
+    let outcome = set_account_logins_locked_under_lock(&host, distro(), &account(), true);
+
+    assert!(
+        matches!(outcome, Err(LoginsError::Bound(_))),
+        "got {outcome:?}"
+    );
+}
+
+#[test]
+fn a_cull_that_times_out_fails_the_suspension_with_a_bound() {
+    // Some processes may have been signalled and some not, so the suspension is
+    // reported as failed, exactly as for a refusing `pkill`.
+    let host = one_of_each().with_process(ACCOUNT_UID);
+    host.time_out("pkill");
+
+    let outcome = set_account_logins_locked_under_lock(&host, distro(), &account(), true);
+
+    assert!(
+        matches!(outcome, Err(LoginsError::Bound(_))),
+        "got {outcome:?}"
+    );
+}
+
+#[test]
+fn each_tool_of_the_lock_runs_in_the_class_of_what_it_does() {
+    // `usermod` and `pkill` change state (Mutation, 120 s); `passwd -S` is a
+    // question (Query). A wrong class is a wrong deadline: a Reload class would
+    // let a wedged `usermod` hold the account lock for four minutes.
+    let host = one_of_each().with_process(ACCOUNT_UID);
+
+    set_account_logins_locked_under_lock(&host, distro(), &account(), true).expect("locked");
+
+    for spawn in host.spawns() {
+        let expected = if spawn.argv[0].ends_with("passwd") {
+            CallClass::Query
+        } else {
+            CallClass::Mutation
+        };
+        assert_eq!(spawn.class, expected, "{:?}", spawn.argv);
+    }
+    assert!(
+        host.spawns()
+            .iter()
+            .any(|spawn| spawn.argv[0].ends_with("passwd")),
+        "the status read must have run, or the loop above proved nothing"
+    );
+}
+
+#[test]
+fn passwd_status_is_asked_without_an_end_of_options_marker() {
+    // The inverse control of the `--` guard on `usermod`: `passwd` is the one
+    // tool of this area whose handling of `--` differs between the families, so
+    // it is deliberately NOT guarded and a marker appearing here is a change
+    // somebody has to have measured.
+    let host = one_of_each();
+
+    set_account_logins_locked_under_lock(&host, distro(), &account(), true).expect("locked");
+
+    let status_reads: Vec<Vec<String>> = host
+        .spawns()
+        .into_iter()
+        .map(|spawn| spawn.argv)
+        .filter(|argv| argv[0].ends_with("passwd"))
+        .collect();
+    assert!(!status_reads.is_empty());
+    for argv in status_reads {
+        assert!(!argv.iter().any(|argument| argument == "--"), "{argv:?}");
+    }
 }
