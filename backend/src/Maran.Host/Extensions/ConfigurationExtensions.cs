@@ -198,6 +198,11 @@ public static class ConfigurationExtensions
         services.AddOptions<ReverseProxyOptions>()
             .Bind(configuration.GetSection(ReverseProxyOptions.SectionName));
 
+        // No [Required] either: a panel installed before the setting existed has none, and absence
+        // means "reserve only the static set" (PanelHostDirectory), never a refused boot.
+        services.AddOptions<PanelHostOptions>()
+            .Bind(configuration.GetSection(PanelHostOptions.SectionName));
+
         return services;
     }
 

@@ -51,4 +51,7 @@
   <data name="AccountNotFound">
     <value>This account could not be found.</value>
   </data>
+  <data name="FtpsHostnameReserved">
+    <value>This name cannot be used for the FTPS server.</value>
+  </data>
 </root>

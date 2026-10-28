@@ -57,4 +57,7 @@
   <data name="AcmeChallengeTokenInvalid">
     <value>Վկայագրման կենտրոնը ուղարկեց ստուգման նշույթ, որը սերվերը չի ընդունում։</value>
   </data>
+  <data name="CertificateDomainReserved">
+    <value>Այս անվան համար վկայական հնարավոր չէ թողարկել կամ տեղադրել։</value>
+  </data>
 </root>

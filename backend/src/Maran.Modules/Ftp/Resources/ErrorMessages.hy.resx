@@ -51,4 +51,7 @@
   <data name="AccountNotFound">
     <value>Այս հաշիվը չի գտնվել։</value>
   </data>
+  <data name="FtpsHostnameReserved">
+    <value>Այս անունը հնարավոր չէ օգտագործել FTPS սերվերի համար։</value>
+  </data>
 </root>

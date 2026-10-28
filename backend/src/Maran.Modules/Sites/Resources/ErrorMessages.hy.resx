@@ -60,4 +60,10 @@
   <data name="SiteLogTailFailed">
     <value>Մատյանը հնարավոր չեղավ կարդալ։</value>
   </data>
+  <data name="SiteDomainReserved">
+    <value>Այս անունը հնարավոր չէ օգտագործել կայքի համար։</value>
+  </data>
+  <data name="SiteAliasReserved">
+    <value>Լրացուցիչ անուններից մեկը հնարավոր չէ օգտագործել կայքի համար։</value>
+  </data>
 </root>
