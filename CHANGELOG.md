@@ -5,6 +5,28 @@ than a strict category list: what changed and why it matters to somebody running
 
 ## Unreleased
 
+**The root FTPS service now runs inside a systemd sandbox.** `maran-ftps.service`, the unit the
+installer installs for the internet-facing, root vsftpd, restricted nothing but its runtime
+directory: `systemd-analyze security` scored it 9.4 UNSAFE on Ubuntu 24.04 and 9.6 on AlmaLinux 9.
+It now sets fourteen groups of directives (kernel tunables, modules, logs, control groups, clock and
+hostname protection, native system calls only, no personality changes, no realtime scheduling, no
+write-and-execute memory, no new setuid or setgid files, a short list of address families, a private
+`/dev`, and a capability bounding set of ten capabilities), and scores 5.9 MEDIUM on both families.
+Measured on Ubuntu 24.04 and AlmaLinux 9 under systemd as PID 1: a real FTPS session with TLS forced
+(plaintext login refused, login, upload, passive listing, `SITE CHMOD`, download, logout) passes
+unchanged, and the process reads back the new bounding set and a seccomp filter.
+
+`ProtectHome`, `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp` and `RestrictNamespaces` stay
+off, with the reasons in the threat note: `RestrictNamespaces` in particular makes vsftpd silently
+drop its per-session isolation on Ubuntu 24.04 while logins still succeed. Hosts must re-run the
+installer to receive the new unit. A new structure check keeps the rejected directives out of the
+unit and the capability set within bounds.
+
+Not shown by these measurements: the installer itself and the panel's enable-FTPS path were not run,
+AlmaLinux's per-session isolation and the stock `/etc/shadow` mode 0000 case were not observable, and
+`RestrictSUIDSGID` cannot be seen from a session because vsftpd masks the mode itself. This change
+touches a root, internet-facing service and still needs a second reviewer before it reaches `main`.
+
 **The panel refuses to start on a published or weak key outside Development and Testing.** The
 repository's sample `.env.example` ships an encryption key and a token-signing key so a development
 loop works out of the box, and nothing stopped an install from running on them: measured with the
