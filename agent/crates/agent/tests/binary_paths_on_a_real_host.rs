@@ -265,11 +265,17 @@ impl GuardedShape {
         arguments
     }
 
-    /// The control vector: the same call with an option the program does not have
-    /// where the marker is.
+    /// The control vector: the same call with an option the program does not have,
+    /// placed FIRST, before the shape's own options.
+    ///
+    /// First and not where the marker is, because option parsing runs left to right
+    /// and a program may refuse an earlier option's argument before it ever reaches
+    /// the bogus one: `crontab -u <absent account>` says the user is unknown and
+    /// stops, which is not a refusal of an option and would make this control fail
+    /// for a reason that has nothing to do with the program's wording.
     fn with_a_bogus_option(&self) -> Vec<String> {
-        let mut arguments = self.options.clone();
-        arguments.push(BOGUS_OPTION.to_owned());
+        let mut arguments = vec![BOGUS_OPTION.to_owned()];
+        arguments.extend(self.options.iter().cloned());
         arguments.push(END_OF_OPTIONS.to_owned());
         arguments.extend(self.operands.iter().cloned());
         arguments

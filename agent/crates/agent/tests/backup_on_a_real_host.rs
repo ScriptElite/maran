@@ -1608,13 +1608,16 @@ fn an_archive_whose_member_name_exceeds_the_bound_is_refused_before_anything_is_
         })
         .collect();
     entries.sort();
+    // Sorted the same way as the directory listing above, so the comparison does not
+    // depend on how the two numbers happen to order as text.
+    let mut expected = vec![
+        format!("named-{MEMBER_NAME_PAST_THE_BOUND}.tar.gz"),
+        format!("named-{MEMBER_NAME_WITHIN_THE_BOUND}.tar.gz"),
+        "source".to_owned(),
+    ];
+    expected.sort();
     assert_eq!(
-        entries,
-        vec![
-            format!("named-{MEMBER_NAME_PAST_THE_BOUND}.tar.gz"),
-            format!("named-{MEMBER_NAME_WITHIN_THE_BOUND}.tar.gz"),
-            "source".to_owned(),
-        ],
+        entries, expected,
         "listing an archive must not extract any member"
     );
 }
