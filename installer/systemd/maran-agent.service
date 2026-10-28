@@ -351,6 +351,115 @@ RestrictRealtime=true
 RestrictNamespaces=true
 LockPersonality=true
 
+# The four directives from here down to the ProtectProc= paragraph were added by issue #91 from
+# analysis, and none of them has yet been observed on a running server. Each one carries a single
+# marker line saying what it still owes, and every such marker in this file follows one rule. The
+# verification phase turns that directive on ALONE, changing one property per run, in a throwaway
+# install polygon with real systemd as PID 1 (Ubuntu 24.04 and AlmaLinux 9 at the least). It reads
+# the value back from the loaded unit (`systemctl show maran-agent -p <Directive>`), confirms the
+# journal has no "Unknown key" line for it, and drives account, quota, site, cron, backup and
+# restore, firewall, SFTP and suspension operations through the panel's API. A directive that
+# holds has its marker replaced by what was measured: family, systemd version, operations, result.
+# A directive that breaks anything is removed, and its comment records the observation that
+# removed it. A hardening directive kept on the strength of "it should be fine" is how the
+# panel's own unit once acquired one that stopped it starting (issue #40).
+# Threat note: docs/superpowers/notes/2026-10-26-agent-unit-hardening-threat-note.md.
+#
+# SystemCallArchitectures=native: system calls made through any ABI other than the host's own
+# (i386 and x32 on an x86_64 kernel built with IA32 emulation, 32-bit arm on aarch64) are refused.
+# Nothing here needs them gone; the reason is that the filters in this file are not equally tight
+# on every ABI. On i386, sockets are multiplexed through socketcall(2), which is weaker ground for
+# RestrictAddressFamilies=, so a non-native binary would be a way around it. Nothing the agent runs
+# is non-native: the agent is a native Rust binary, its one raw syscall (close_range in
+# fork_as_account) uses the native number, and every allow-listed child is a distro-packaged
+# binary of the host architecture.
+# UNCONFIRMED (#91): owes the agent starting and the operations passing with only this changed.
+#   The record says whether the measured kernel had IA32 emulation at all (without it the
+#   restriction is unobservable there), and whether a violation was killed (SIGSYS) or got EPERM.
+SystemCallArchitectures=native
+# ProtectControlGroups=true: /sys/fs/cgroup becomes read-only in this daemon's mount namespace.
+# Without it, uid 0 (which owns every cgroup interface file, so plain file permission lets it
+# write them) can rewrite any service's limits or freeze it, a denial of service against the
+# whole host. It can also move a process it forked out of this unit's cgroup, where that
+# process survives `systemctl stop` and the
+# KillMode=control-group the TimeoutStopSec= paragraph relies on. On a host booted with cgroup v1
+# or the hybrid hierarchy it would also reach the root cgroup's release_agent, which the kernel
+# runs as full root outside every restriction in this file. That last point is the kernel's
+# documented behaviour and was not measured; every supported release defaults to cgroup v2.
+#
+# Nothing the agent does writes a cgroup. Its own code touches none, and `systemctl` asks PID 1,
+# which mounts the SFTP jails and reloads nginx and php-fpm from outside this namespace. An
+# earlier version of this file left the directive off on the guess that "per-account systemd
+# slices may need it"; no slice, scope or systemd-run exists anywhere in the agent. The read-only
+# mount holds against CAP_SYS_ADMIN (in the bounding set below), which could otherwise remount
+# it writable, only because the @system-service group below contains no
+# mount syscall (expanded on systemd 255; each family's systemd is to be checked the same way)
+# and RestrictNamespaces= above refuses a fresh namespace to mount in.
+# UNCONFIRMED (#91): owes `findmnt /sys/fs/cgroup` inside the agent's namespace (nsenter -m)
+#   showing ro, and SFTP login create (a mount unit), site create (the reload), FTPS enable and
+#   the service-status read passing. On systemd 257, where the directive gained `private` and
+#   `strict`, it also owes what `true` mounts there, read from the loaded unit.
+ProtectControlGroups=true
+# ProtectKernelModules=true: the module syscalls are refused by seccomp and the module tree
+# (/usr/lib/modules, /lib/modules) is hidden. Its value is small and is stated as small:
+# CAP_SYS_MODULE is already missing from the bounding set below, so an explicit module load
+# already fails. An earlier version of this file left it off on the claim that it "would block
+# the systemctl calls this daemon issues". That was reasoned rather than measured, and the
+# reasoning does not hold: systemctl loads no module and reads no module tree, and the work it
+# asks for is done by PID 1 outside this sandbox. Kernel AUTO-loading, such as the nf_tables
+# expression modules a firewall rpc's first `nft -f` can pull in, is run by the kernel in the init
+# namespace and is expected to keep working. nginx's dynamic modules live under
+# /usr/lib/nginx/modules or /usr/lib64/nginx/modules, so `nginx -t` is unaffected.
+# UNCONFIRMED (#91): owes the firewall rpcs (allow, ban, list, unban), `setquota` and the
+#   `quotaon -p` enforceability read passing, and the module tree inaccessible in the agent's
+#   namespace. The polygon shares a kernel whose nf_tables modules are already loaded, so the
+#   record says that cold autoload was not observed.
+ProtectKernelModules=true
+# RestrictSUIDSGID=true: the kernel refuses a set-user-ID or set-group-ID bit in the mode argument
+# of chmod, mkdir, mknod and open(O_CREAT), for this daemon and for every child it runs.
+# NoNewPrivileges= already stops such a file from elevating anything INSIDE this sandbox, but a
+# customer's processes run outside it: a setuid-root file written anywhere outside /usr is local
+# root for whichever customer runs it, and it outlives the agent. The agent itself never asks for
+# these bits. One path refuses them in Rust (the validated FileMode of files.*) and a restore's
+# tar is told to drop them (--no-same-permissions). This enforces the same on every other
+# path and in every child (tar, useradd copying the skeleton, chmod, chgrp) without
+# depending on each validator.
+# The distro package manager inherits it too for as long as it runs as this daemon's child
+# (#93); that is a reason to run it outside this sandbox, never a reason to drop this line.
+#
+# Possible edge, NOT measured: GNU chmod given a four-digit octal keeps a directory's existing
+# setgid bit, so on a host whose /home itself carries g+s the `chmod 0750` on a new home might be
+# refused and account creation fail loudly. Whether the new home still carries the inherited bit
+# by then depends on how useradd sets the home's mode, which was reasoned and not read.
+#
+# systemd added this directive in 242, so every supported system knows it (the oldest, Ubuntu
+# 22.04, ships 249; the EL9 family ships 252).
+# UNCONFIRMED (#91): owes account create and delete (also on a host with `chmod g+s /home`,
+#   with the new home's mode read after useradd to settle the edge above), a restore of a
+#   home holding a setuid file and a setgid directory (it must succeed and leave no setid
+#   bit; also an archive made by the previous release, on both families), and a stand-in
+#   transient unit showing `chmod u+s` refused through both fchmodat and fchmodat2 on each
+#   systemd measured, plus the value read back from the loaded unit on the oldest supported
+#   systemd and on EL9. If the restore fails, this directive is removed.
+RestrictSUIDSGID=true
+# ProtectProc=invisible is deliberately NOT set; it was analysed and refused, and ProcSubset=pid
+# with it. This daemon has no CAP_SYS_PTRACE (bounding set below), so under hidepid=invisible it
+# would stop seeing every process of another uid. Two security functions read /proc through a
+# child and would then fail silently, in the insecure direction:
+#   suspension  `pkill --uid` (ops::logins::end_account_sessions) would match nothing and exit 1,
+#               which that module rightly reads as "no session open", so a suspension would be
+#               recorded as complete while the customer's SFTP session kept writing.
+#   deletion    `userdel --remove` refuses a user with live processes (exit 8) only by scanning
+#               /proc, and nothing kills those processes first on the deletion path, so the
+#               account would go while its processes lived on under a uid the next useradd hands
+#               to a different tenant.
+# Either is worse than the exposure the directive closes: other users' command lines visible to
+# this daemon. ProcSubset=pid is refused for a plainer reason: it hides /proc/mounts and
+# /proc/net/*, which account creation's quota step and monitor.GetHostMetrics read.
+# UNCONFIRMED (#91): the rejection owes its observation, made with the directive applied in a
+#   throwaway polygon edit and never shipped: a process at the account's uid, watched from OUTSIDE
+#   the sandbox, survives suspension and deletion with it on, and is killed or refused with it off.
+
 # MemoryDenyWriteExecute: on HERE, and off in maran-api.service. The asymmetry is the point.
 #
 # It forbids a writable-and-executable mapping — what a just-in-time compiler must create. The
@@ -361,7 +470,21 @@ LockPersonality=true
 # Measured before it was added rather than reasoned about: run as a transient unit carrying this
 # directive on Ubuntu 24.04, the agent reported Result=success, ExecMainStatus=0. A hardening
 # directive added on the strength of "it should be fine" is how the panel's own unit acquired one
-# that stopped it starting.
+# that stopped it starting. That measurement, not a rule, is what keeps it here: an earlier
+# comment in this file credited a rule with saying the agent runs no generated code, and no rule
+# says so.
+#
+# What that measurement did not cover: it saw the daemon START. The directive is inherited by
+# every child the agent runs (`nginx -t`, `php-fpm -t`, nft, tar, the dump tools, the shadow
+# suite), and none of them has yet been observed under it. PCRE2's JIT is the realistic case:
+# nginx with `pcre_jit on`, PHP with pcre.jit (on by default), or an opcache JIT an operator
+# enabled. The long-running daemons are started by PID 1 and are not affected; only their
+# validation runs here.
+# UNCONFIRMED (#91): owes the operations with their children under it: site create (`nginx -t`
+#   exits 0), PHP pool write (`php-fpm -t` exits 0), FTPS enable, backup and restore, certificate
+#   install, scored by exit status and rpc result (a JIT warning on stderr is not a failure). It
+#   also owes which enforcement ran (seccomp, or the kernel's PR_SET_MDWE where systemd uses it),
+#   because the polygon's kernel is newer than most production kernels.
 MemoryDenyWriteExecute=true
 RemoveIPC=true
 # AF_NETLINK is not optional despite looking exotic: firewall.AllowPort/DenyPort/
@@ -382,10 +505,10 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 #                    record; without the capability useradd reports a failure rather
 #                    than silently skipping the record.
 CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SETGID CAP_SETUID CAP_KILL CAP_SYS_ADMIN CAP_NET_ADMIN CAP_AUDIT_WRITE CAP_NET_BIND_SERVICE
-# ProtectKernelModules/MemoryDenyWriteExecute are intentionally NOT set: the agent may
-# need to reload systemd units and (per rules/rust.md) never runs interpreted/JIT'd
-# code, but ProtectKernelModules would block the systemctl calls this daemon issues
-# on the api's behalf; kept off rather than guessed at without a verified test.
+# Absent from that set on purpose, and leaned on by directives above: CAP_SYS_MODULE, which is
+# why ProtectKernelModules= adds little, and CAP_SYS_PTRACE, which is why ProtectProc=invisible
+# would blind this daemon to other users' processes. CAP_SYS_ADMIN is present, and the read-only
+# /sys/fs/cgroup of ProtectControlGroups= is what stops it remounting the cgroup tree writable.
 # quotactl/quotactl_fd are NOT in @system-service, and accounts.SetAccountQuota cannot work
 # without them. The failure they cause does not look like a syscall denial at all, which is why
 # this line is worth its comment (issue #73): SystemCallErrorNumber=EPERM below turns the denied
@@ -407,9 +530,10 @@ UMask=0027
 
 # --- Not yet confirmed on a real boot ---------------------------------------------
 # This sandbox was derived from the rpc set in proto/agent/v1/ and from the systemd.exec
-# semantics of ProtectSystem=/ReadWritePaths=, not from a running server. Nothing below
-# has been observed to work; each line is a claim to be checked once, on one host of
-# each family (Ubuntu/Debian and AlmaLinux/Rocky), and this comment shrinks as they are:
+# semantics of ProtectSystem=/ReadWritePaths=, not from a running server. No item below
+# that is not marked confirmed has been observed to work; each line is a claim to be checked
+# once, on one host of each family (Ubuntu/Debian and AlmaLinux/Rocky), and this comment
+# shrinks as they are:
 #   1. accounts.CreateAccount then DeleteAccount — the EROFS this file exists to fix.
 #      Confirm /etc/passwd, /etc/shadow, /etc/group, /etc/gshadow, /etc/subuid and the
 #      "-" backup generation are all written.
@@ -425,9 +549,10 @@ UMask=0027
 #      block device (PrivateDevices= hides it), quotactl in SystemCallFilter= above, and the
 #      agent passing the DEVICE rather than a path (quota_device_for in the ops crate). Still
 #      to check on the RHEL family.
-#   6. ProtectKernelModules/MemoryDenyWriteExecute (left off above) and
-#      ProtectControlGroups (never set — per-account systemd slices may need it):
-#      turn each on one at a time and find out, rather than reasoning about it.
+#   6. What issue #91 added or re-justified: SystemCallArchitectures=, ProtectControlGroups=,
+#      ProtectKernelModules= and RestrictSUIDSGID=, the operations measurement that
+#      MemoryDenyWriteExecute= (set above) has not had, and the ProtectProc= rejection. Each says
+#      beside it what it owes; turn each on alone and find out, rather than reasoning about it.
 
 [Install]
 WantedBy=multi-user.target

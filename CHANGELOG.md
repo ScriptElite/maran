@@ -5,6 +5,23 @@ than a strict category list: what changed and why it matters to somebody running
 
 ## Unreleased
 
+**The root agent's systemd unit is hardened further.** The unit that runs the agent as root kept
+the kernel's control-group files writable, let it load kernel modules, accepted 32-bit system calls
+and let it create setuid and setgid files. It now sets `ProtectControlGroups=true`,
+`ProtectKernelModules=true`, `SystemCallArchitectures=native` and `RestrictSUIDSGID=true`;
+`MemoryDenyWriteExecute=true` stays on. Measured on Ubuntu 24.04 (systemd 255) and AlmaLinux 9
+(systemd 252): the agent starts and listens as before, and account, home-mode, site (`nginx -t`,
+`php-fpm -t`, reload), certificate, cron, backup, restore, firewall and SFTP mount-unit operations
+behave the same with the four directives on. The cgroup view becomes read-only, a 32-bit binary is
+killed with SIGSYS, `chmod u+s` is refused, and `systemd-analyze security` exposure falls from 4.4
+to 3.6.
+
+`ProtectProc=invisible` and `ProcSubset=pid` are deliberately not set. `ProcSubset=pid` made `pkill`
+fail on AlmaLinux 9, so a suspended account's processes stayed alive. The unit comments now say so
+and mark what is still unmeasured (quota, other distribution versions, module autoload, cgroup v1).
+Hosts must re-run the installer to receive the new unit. The change needs a second human review
+before it reaches `main`.
+
 **The root FTPS service now runs inside a systemd sandbox.** `maran-ftps.service`, the unit the
 installer installs for the internet-facing, root vsftpd, restricted nothing but its runtime
 directory: `systemd-analyze security` scored it 9.4 UNSAFE on Ubuntu 24.04 and 9.6 on AlmaLinux 9.
