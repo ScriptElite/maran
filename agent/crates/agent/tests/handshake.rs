@@ -649,9 +649,11 @@ const PANEL_PASSIVE_ADDRESS_WHEN_NOT_BEHIND_NAT: &str = "";
 /// `enable_ftps` asks for certificate material FIRST and returns
 /// `CertificateMissing` with nothing written, so a hostname nothing can have
 /// material for is what makes this test safe to run anywhere: it reaches the
-/// operation and stops inside its first step, mutating nothing. `.invalid` is
-/// reserved by RFC 2606 and no certificate authority issues for it.
-const A_HOSTNAME_NO_CERTIFICATE_STORE_HOLDS: &str = "panel-seam-check.invalid";
+/// operation and stops inside its first step, mutating nothing. `.test` is
+/// reserved by RFC 2606 and no certificate authority issues for it. It is NOT
+/// `.invalid`: that suffix is in the agent's reserved host name set, so
+/// `enable_ftps` refuses it as input before it ever asks for material.
+const A_HOSTNAME_NO_CERTIFICATE_STORE_HOLDS: &str = "panel-seam-check.example.test";
 
 /// The request the PANEL builds when an operator enables FTPS on an ordinary
 /// host, as `AgentFtpsClient.EnableAsync` puts it on the wire.
@@ -976,6 +978,133 @@ async fn a_reserved_account_name_is_refused_over_the_wire_before_any_tool_runs()
         .unwrap()
         .into_inner();
     assert_eq!(cron_list_code(listing), not_found);
+
+    server.abort();
+}
+
+/// The error code a `CreateSite` response carries, or a panic naming what came
+/// back instead.
+///
+/// # Panics
+///
+/// Panics when the response is an `Ok` envelope or carries no result: a reserved
+/// name that provisioned a site is the very failure this suite exists to catch.
+fn create_site_code(response: maran_agent::proto::CreateSiteResponse) -> i32 {
+    match response.result {
+        Some(create_site_response::Result::Error(error)) => error.code,
+        other => panic!("CreateSite must answer with a typed refusal, got {other:?}"),
+    }
+}
+
+/// A reserved host name is refused over the wire as invalid input at the doors that
+/// write a name into an nginx `server_name` or a certificate store, before any host
+/// access, so the test needs no root and no nginx. The panel's own refusal is
+/// asserted by the backend suite; this is the agent's own, asked directly with the
+/// same names (rules/security.md item 1).
+///
+/// Blind spot: this proves the doors refuse, not that an ordinary name passes them,
+/// since a real ordinary `CreateSite` needs root. The inverse control lives in the
+/// pure unit tests of `validated_site`, `validated_identity` and
+/// `validated_ftps_configuration`, which accept an ordinary domain and alias.
+#[tokio::test]
+async fn a_reserved_host_name_is_refused_over_the_wire_as_invalid_input_at_every_door() {
+    let directory = tempfile::tempdir().unwrap();
+    let socket_path = directory.path().join("agent.sock");
+
+    let policy = PeerPolicy::new(maran_agent_core::utils::current_uid::current_uid().unwrap());
+    let server_path = socket_path.clone();
+    let mut server =
+        tokio::spawn(async move { maran_agent::server::serve(&server_path, policy).await });
+
+    match wait_until_listening(&socket_path, &mut server).await {
+        Started::Listening => {}
+        Started::UnsupportedHost(reason) => {
+            eprintln!("skipping the reserved host name test: {reason}");
+            return;
+        }
+    }
+
+    let channel = connect(&socket_path).await;
+    let invalid = ErrorCode::InvalidInput as i32;
+    let reserved = [
+        "203.0.113.7",
+        "shop.123",
+        "foo.localhost",
+        "x.local",
+        "x.localdomain",
+        "x.internal",
+        "x.lan",
+        "x.invalid",
+        "FOO.LOCAL",
+    ];
+
+    for name in reserved {
+        // The primary domain.
+        let as_domain = SitesServiceClient::new(channel.clone())
+            .create_site(CreateSiteRequest {
+                account_username: "polyrsv".to_owned(),
+                domain: name.to_owned(),
+                backend_type: SiteBackendType::Static as i32,
+                ..CreateSiteRequest::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            create_site_code(as_domain),
+            invalid,
+            "a site whose domain is `{name}` must be refused as input"
+        );
+
+        // An alias, beside an ordinary primary domain.
+        let as_alias = SitesServiceClient::new(channel.clone())
+            .create_site(CreateSiteRequest {
+                account_username: "polyrsv".to_owned(),
+                domain: "rsv.example.test".to_owned(),
+                aliases: vec![name.to_owned()],
+                backend_type: SiteBackendType::Static as i32,
+                ..CreateSiteRequest::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            create_site_code(as_alias),
+            invalid,
+            "a site with the alias `{name}` must be refused as input"
+        );
+
+        // The FTPS server's host name.
+        let mut enable = the_shape_the_panel_sends();
+        enable.hostname = name.to_owned();
+        let enabled = FtpsServiceClient::new(channel.clone())
+            .enable_ftps(enable)
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            refusal_code(enabled),
+            invalid,
+            "FTPS on the host name `{name}` must be refused as input"
+        );
+    }
+
+    // The inverse control, read-only: asking for the status of an FTPS host name that was
+    // reserved before this rule existed is NOT refused as input, because read-only
+    // rpcs keep working for names already on the host.
+    let status = FtpsServiceClient::new(channel)
+        .get_ftps_status(GetFtpsStatusRequest {
+            hostname: "legacy.internal".to_owned(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    if let Some(get_ftps_status_response::Result::Error(error)) = status.result {
+        assert_ne!(
+            error.code, invalid,
+            "a read-only status query for an existing reserved name must not be refused as input"
+        );
+    }
 
     server.abort();
 }
