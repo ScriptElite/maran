@@ -158,6 +158,12 @@ static ACCOUNT_LOCKS: Mutex<Option<HashMap<String, Arc<AsyncMutex<()>>>>> = Mute
 /// account is measured in hours, not seconds — and would park a blocking-pool
 /// thread for that whole time.
 ///
+/// **Worst-case hold.** Every program run under this lock is bounded by its call
+/// class, so a wedged child ends the hold: a deletion's `userdel --remove` removes
+/// a whole home and runs under the `Bulk` class (twelve hours at most), while the
+/// rollback of a failed creation, whose home is empty, runs under `Mutation`.
+/// Other callers are refused with the busy code meanwhile; none waits.
+///
 /// # Lock ordering: the whole graph, and why it has no cycle
 ///
 /// Five locks exist in this workspace — the same five `rules/rust.md` lists
