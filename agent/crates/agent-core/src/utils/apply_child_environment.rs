@@ -59,9 +59,10 @@ pub const CHILD_ENVIRONMENT: [(&str, &str); 2] =
 
 /// Clears `command`'s inherited environment and sets [`CHILD_ENVIRONMENT`].
 ///
-/// Every spawn in this workspace goes through this function — the shared
-/// `spawn_argv`, and equally the handful of spawns that are deliberately
-/// different because they need standard input or a bounded read.
+/// Every spawn in this workspace goes through this function, because every
+/// spawn goes through the bounded core's one `launch_child` — `spawn_argv`, and
+/// equally the calls that pipe standard input, run for a window or run inside a
+/// fork. What a child INHERITS is not one caller's decision.
 ///
 /// # Why clearing, and what it is and is not worth
 ///
