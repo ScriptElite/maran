@@ -479,6 +479,7 @@ main() {
   assert_panel_port_has_one_authority
   assert_the_service_account_name_has_one_authority
   assert_generated_keys_are_documented
+  assert_the_panel_host_name_is_recorded_from_the_name_the_vhost_serves
   # Before the firewall assertions: they write /etc/maran/panel.env at its real path and refuse
   # to run when it is already there, and so does this one. It cleans up after itself.
   assert_the_finish_message_tells_the_truth_about_this_install
