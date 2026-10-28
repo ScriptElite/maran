@@ -504,6 +504,14 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 #                    shadow-utils is built with audit support and emits an ADD_USER
 #                    record; without the capability useradd reports a failure rather
 #                    than silently skipping the record.
+#   CAP_KILL         defence in depth for every bounded spawn (issue #90): on a deadline
+#                    the agent kills the child's WHOLE process group. Today every member
+#                    of such a group runs as root (the agent starts no package manager,
+#                    and a root parent signalling its own root children needs no
+#                    capability), so nothing depends on this line yet. It stays so that a
+#                    future child that drops privileges to another uid cannot turn the
+#                    group kill into a silently partial one: kill(2) reports success when
+#                    it signalled ANY member.
 CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SETGID CAP_SETUID CAP_KILL CAP_SYS_ADMIN CAP_NET_ADMIN CAP_AUDIT_WRITE CAP_NET_BIND_SERVICE
 # Absent from that set on purpose, and leaned on by directives above: CAP_SYS_MODULE, which is
 # why ProtectKernelModules= adds little, and CAP_SYS_PTRACE, which is why ProtectProc=invisible
@@ -524,6 +532,15 @@ CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SETGID CAP_SETUI
 #     SystemCallFilter=@system-service quotactl   setquota exits 0, quota applied
 # quotactl_fd is listed alongside it for kernels where quota-tools uses the newer call; systemd
 # ignores a syscall name the running kernel does not know, so naming both costs nothing.
+# The bounded spawn (issue #90) needs setpgid (child in its own group), kill (group kill),
+# waitid and wait4 (deadline wait and reap), clone/clone3/execve and pipe2/poll. All are
+# in @system-service, so this line needs nothing for it. MEASURED: the group, expanded
+# recursively (a flat grep of `systemd-analyze syscall-filter` is blind to included groups),
+# contains them on alma9 and debian12 (threat note, item 13); the other images were not re-measured. NOT measured: a deadline-kill
+# spawn under this real sandbox, which is to be verified (systemd-analyze verify, plus one
+# on one host of each family) before the claim is relied on. pidfd_open and
+# pidfd_send_signal are deliberately NOT added: that is a design choice (the spawn core does not use
+# pidfds), not a measured fact; both are already in @system-service on the measured images.
 SystemCallFilter=@system-service quotactl quotactl_fd
 SystemCallErrorNumber=EPERM
 UMask=0027
