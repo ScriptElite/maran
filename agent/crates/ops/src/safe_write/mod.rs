@@ -19,6 +19,9 @@
 //! while warning about something the caller names — `nginx -t` exits 0 on two
 //! vhosts claiming one host name.
 
+#[cfg(test)]
+#[path = "../tests/safe_write/adapter_programs.rs"]
+pub(crate) mod adapter_programs;
 mod config_host;
 mod config_tree_lock;
 mod create_config;

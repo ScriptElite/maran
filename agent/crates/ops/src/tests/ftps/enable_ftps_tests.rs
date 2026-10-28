@@ -5,6 +5,8 @@
 
 use std::io::ErrorKind;
 
+use maran_agent_core::utils::call_class::CallClass;
+
 use crate::ftps::enable_ftps::enable_ftps;
 use crate::ftps::fake_ftps_host::{FakeFtpsHost, configuration, configuration_behind_nat, distro};
 use crate::ftps::ftps_error::FtpsError;
@@ -212,7 +214,7 @@ fn the_candidate_is_validated_before_anything_is_swapped_in() {
     let spawns = host.spawns();
     let candidate = spawns
         .iter()
-        .position(|spawn| spawn.argv[0] == distro().vsftpd_binary())
+        .position(|spawn| spawn.argv[0] == distro().vsftpd_binary().as_str())
         .expect("the candidate was run");
     let restart = spawns
         .iter()
@@ -240,4 +242,48 @@ fn a_live_configuration_that_cannot_be_read_stops_the_enable_before_it_writes() 
 
     assert_eq!(failed, FtpsError::ConfigUnreadable);
     assert!(host.written_configs().is_empty());
+}
+
+#[test]
+fn the_restart_that_judges_the_new_file_runs_in_the_reload_class() {
+    // A restart may take the service manager's stop timeout plus its start
+    // timeout; a Validate or Query deadline would kill a healthy restart.
+    let host = FakeFtpsHost::with_certificate();
+    enable_ftps(&host, distro(), &configuration()).expect("enabled");
+
+    let restart = host
+        .spawns()
+        .into_iter()
+        .find(|spawn| spawn.argv.get(1).is_some_and(|verb| verb == "restart"))
+        .expect("the daemon was restarted");
+    assert_eq!(restart.class, Some(CallClass::Reload));
+    assert_eq!(
+        restart.argv[1..],
+        ["restart", "--", "maran-ftps.service"],
+        "{:?}",
+        restart.argv
+    );
+}
+
+#[test]
+fn a_restart_that_times_out_restores_the_previous_configuration_and_reports_a_bound() {
+    let host = FakeFtpsHost::with_certificate()
+        .with_live_config("listen=NO\n")
+        .with_config_writes_timing_out();
+
+    let failed = enable_ftps(&host, distro(), &configuration()).expect_err("timed out");
+
+    assert!(matches!(failed, FtpsError::Bound(_)), "got {failed:?}");
+    assert_ne!(
+        failed,
+        FtpsError::ServiceRefused {
+            unit: "maran-ftps.service".to_owned()
+        },
+        "a killed restart said nothing about the file"
+    );
+    assert_eq!(
+        host.live_config().as_deref(),
+        Some("listen=NO\n"),
+        "the previous configuration must be back on disk"
+    );
 }

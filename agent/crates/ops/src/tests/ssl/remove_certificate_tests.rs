@@ -2,6 +2,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use maran_agent_core::utils::call_class::CallClass;
+
 use crate::sites::fake_site_host::{create_test_site, distro, legacy_suspended_text, php_input};
 use crate::sites::{SiteCertificate, SitePaths, disable_site};
 use crate::ssl::fake_ssl_host::{Event, FakeSslHost, matching_material};
@@ -147,4 +149,37 @@ fn removing_a_certificate_from_a_site_serving_the_earlier_stub_leaves_the_stub()
         "a removal must not wake a site suspended before the upgrade"
     );
     assert_eq!(host.vhost_writes(), writes_before);
+}
+
+#[test]
+fn a_removal_whose_material_step_times_out_is_a_bound_and_the_material_stays() {
+    let host = host_with_certificate();
+    let input = php_input();
+    host.time_out_material_writes();
+
+    let failure = remove_certificate(&host, distro(), &input).unwrap_err();
+
+    assert!(matches!(failure, SslOpError::Bound(_)), "{failure:?}");
+    assert!(
+        !host.events().contains(&Event::MaterialRemoved),
+        "a removal that was killed is not one that happened: {:?}",
+        host.events()
+    );
+    assert_eq!(host.stored_count(), 2);
+}
+
+#[test]
+fn the_removal_validates_in_the_validate_class() {
+    let host = host_with_certificate();
+
+    remove_certificate(&host, distro(), &php_input()).unwrap();
+
+    let protocols = host.protocols();
+    let removal = protocols.last().expect("a removal ran");
+    assert_eq!(removal.validator_class, CallClass::Validate);
+    assert!(
+        removal.reload.contains(&"--".to_owned()),
+        "{:?}",
+        removal.reload
+    );
 }

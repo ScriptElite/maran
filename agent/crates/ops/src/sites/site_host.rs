@@ -127,8 +127,10 @@ pub trait SiteHost: Send + Sync {
     /// # Errors
     ///
     /// Returns [`SitesOpError::NginxValidation`] or
-    /// [`SitesOpError::ReloadFailed`] with the previous vhost restored, and
-    /// [`SitesOpError::ConfigWrite`] for every other failure of the protocol.
+    /// [`SitesOpError::ReloadFailed`] with the previous vhost restored,
+    /// [`SitesOpError::Bound`] (also with it restored) when a program outlived
+    /// its deadline and was killed, and [`SitesOpError::ConfigWrite`] for every
+    /// other failure of the protocol.
     fn write_config(
         &self,
         target: &Path,

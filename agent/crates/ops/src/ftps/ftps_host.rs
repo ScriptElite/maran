@@ -4,10 +4,12 @@ use std::path::Path;
 use std::time::Duration;
 
 use maran_agent_core::command_outcome::CommandOutcome;
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::system::ftps_user_name::FtpsUserName;
 use maran_agent_core::validation::system::managed_account::ManagedAccount;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_agent_core::validation::web::domain::Domain;
+use maran_distro::AdapterBinary;
 
 use crate::ftps::ftps_error::FtpsError;
 use crate::ftps::model::candidate_outcome::CandidateOutcome;
@@ -30,16 +32,27 @@ use crate::ssl::CertificateState;
 /// from the `DistroAdapter`, never through a shell and never through a program
 /// name resolved by `PATH` (rules/security.md item 3).
 pub trait FtpsHost: Send + Sync {
-    /// Runs `program` with `arguments` as an argv array and waits for it.
+    /// Runs `program` with `arguments` as an argv array and waits for it, for at
+    /// most the deadline of `class`.
+    ///
+    /// `program` is an [`AdapterBinary`], the type only the distro crate can
+    /// build, so no value from a request can name the program. On a deadline the
+    /// child and its whole process group are killed.
     ///
     /// # Errors
     ///
     /// Returns [`FtpsError::SpawnFailed`] with a negative code when the program
-    /// cannot be started at all. A non-zero exit is NOT an error here — it comes
-    /// back in the outcome, because each caller reads a status differently:
-    /// `is-active` answers a question with its status, while a refused `restart`
-    /// is a failure.
-    fn run(&self, program: &str, arguments: &[&str]) -> Result<CommandOutcome, FtpsError>;
+    /// cannot be started at all, and [`FtpsError::Bound`] when it outran the
+    /// deadline of `class` or its output ceiling. A non-zero exit is NOT an error
+    /// here — it comes back in the outcome, because each caller reads a status
+    /// differently: `is-active` answers a question with its status, while a
+    /// refused `restart` is a failure.
+    fn run(
+        &self,
+        program: &AdapterBinary,
+        arguments: &[&str],
+        class: CallClass,
+    ) -> Result<CommandOutcome, FtpsError>;
 
     /// Reads the live configuration file, or answers `None` when it is not there.
     ///
@@ -64,6 +77,9 @@ pub trait FtpsHost: Send + Sync {
     /// service manager, so a refusal there is the daemon or systemd refusing.
     /// Returns [`FtpsError::SpawnFailed`] when one of them could not be started,
     /// and [`FtpsError::ConfigWrite`] for the protocol's own mechanical failures.
+    /// Returns [`FtpsError::Bound`] when the validator or the reload outran its
+    /// deadline: the previous content has been restored and the lock released
+    /// by then, and the bound is not reported as a refusal by the service.
     fn write_config(
         &self,
         target: &Path,
@@ -86,10 +102,13 @@ pub trait FtpsHost: Send + Sync {
     /// Returns [`FtpsError::SpawnFailed`] when the candidate cannot be staged or
     /// the program cannot be started. A daemon that started and then exited is
     /// not an error — it is [`CandidateOutcome::Exited`], which is the check's
-    /// whole answer.
+    /// whole answer. A daemon that outlived `deadline` is
+    /// [`CandidateOutcome::StillRunning`], and its whole process group was killed.
+    /// A daemon that printed more than the output ceiling before then is
+    /// [`FtpsError::Bound`], never a verdict on the configuration.
     fn run_candidate(
         &self,
-        program: &str,
+        program: &AdapterBinary,
         contents: &str,
         arguments: &[&str],
         deadline: Duration,
@@ -161,19 +180,22 @@ pub trait FtpsHost: Send + Sync {
     /// processes at its ends.
     ///
     /// Implementations must close the pipe after writing, or a tool that reads
-    /// to end of input never returns and takes a root daemon's task with it.
+    /// to end of input never returns; the deadline of `class` is the backstop
+    /// that frees the task if one does not.
     ///
     /// # Errors
     ///
     /// Returns [`FtpsError::SpawnFailed`] with a negative code when the program
-    /// cannot be started, its standard input cannot be taken or written, or it
-    /// cannot be waited for. A non-zero exit is NOT an error here — it comes
-    /// back in the outcome for the caller to classify.
+    /// cannot be started, its standard input cannot be delivered, or it cannot
+    /// be waited for, and [`FtpsError::Bound`] when it outran the deadline of
+    /// `class` or its output ceiling. A non-zero exit is NOT an error here — it
+    /// comes back in the outcome for the caller to classify.
     fn run_with_stdin(
         &self,
-        program: &str,
+        program: &AdapterBinary,
         arguments: &[&str],
         stdin: &str,
+        class: CallClass,
     ) -> Result<CommandOutcome, FtpsError>;
 
     /// Looks up the numeric identity of the hosting account `account`.

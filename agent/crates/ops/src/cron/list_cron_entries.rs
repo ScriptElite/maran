@@ -30,6 +30,8 @@ use crate::cron::model::crontab_document::CrontabDocument;
 ///   may act on (reserved, absent, a system identity, or with the wrong home).
 ///   Checked first, before the crontab or the home is touched.
 /// - [`CronError::CrontabRefused`] when the crontab could not be read.
+/// - [`CronError::Bound`] when `crontab` outlived its deadline and was killed with its
+///   process group. Nothing was changed.
 /// - [`CronError::EntryFileUnreadable`] when a command file is there and could
 ///   not be read as the entry's own file.
 /// - [`CronError::Privilege`] when the account cannot be resolved.

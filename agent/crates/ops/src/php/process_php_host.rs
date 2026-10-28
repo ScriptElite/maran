@@ -6,8 +6,10 @@ use std::path::Path;
 use maran_agent_core::privs::account_ids::AccountIds;
 use maran_agent_core::privs::fork_as_account::fork_as_account;
 use maran_agent_core::privs::priv_error::PrivError;
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::utils::spawn_argv::spawn_argv;
 use maran_agent_core::validation::system::name::AccountName;
+use maran_distro::AdapterBinary;
 
 use crate::php::{PhpHost, PhpOpError};
 use crate::safe_write::model::{Reload, Validator};
@@ -44,25 +46,32 @@ impl ConfigHost for ProcessPhpHost {
     /// anything to re-parse — which matters more here than anywhere else in
     /// the agent, because one of these argv arrays contains a unit name built
     /// from a package name.
-    /// `program` comes from the `DistroAdapter`'s allow-list and never from a
-    /// request.
+    /// `program` is an `AdapterBinary`, which only the `DistroAdapter` can
+    /// construct, and never comes from a request.
     ///
     /// The spawn itself is [`spawn_argv`], shared with every other host that
-    /// runs an argv array: the locale pin, the closed standard input and the
-    /// signal-killed `-1` are settled once there rather than five times here.
+    /// runs an argv array: the locale pin, the closed standard input, the
+    /// signal-killed `-1`, the process group, the deadline taken from `class`
+    /// and the output ceiling are settled once there rather than five times
+    /// here.
     ///
     /// # Errors
     ///
     /// Returns [`SafeWriteError::SpawnFailed`] when the program cannot be
     /// started — a missing binary is the one to expect here — carrying the
-    /// operating system's reason. A program that started and exited non-zero
-    /// is not an error: its status comes back in the outcome, and what that
-    /// status means is the protocol's decision, not this host's.
-    fn run(&self, program: &str, arguments: &[&str]) -> Result<CommandOutcome, SafeWriteError> {
-        spawn_argv(program, arguments).map_err(|error| SafeWriteError::SpawnFailed {
-            program: program.to_owned(),
-            reason: error.to_string(),
-        })
+    /// operating system's reason, and [`SafeWriteError::Bound`] when it
+    /// outlived its deadline or its output ceiling and was killed with its
+    /// process group. A program that started and exited non-zero is not an
+    /// error: its status comes back in the outcome, and what that status means
+    /// is the protocol's decision, not this host's.
+    fn run(
+        &self,
+        program: &AdapterBinary,
+        arguments: &[&str],
+        class: CallClass,
+    ) -> Result<CommandOutcome, SafeWriteError> {
+        spawn_argv(program.as_path(), arguments, class)
+            .map_err(|error| SafeWriteError::from_spawn(program, error))
     }
 }
 
@@ -152,20 +161,27 @@ impl PhpHost for ProcessPhpHost {
     /// The status-to-error decision is spelled here rather than borrowed from
     /// `safe_write`, because `safe_write`'s own entry points all swap a file
     /// first and there is nothing to swap: what is being asked is a question
-    /// about the tree already on disk.
+    /// about the tree already on disk. The validator runs under its own class
+    /// and the reload under [`CallClass::Reload`], exactly as the protocol runs
+    /// them, and a bound at either is [`PhpOpError::Bound`], never a refusal.
     fn validate_and_reload(
         &self,
         validator: &Validator<'_>,
         reload: &Reload<'_>,
     ) -> Result<(), PhpOpError> {
-        let checked = ConfigHost::run(self, validator.program, validator.arguments)?;
+        let checked = ConfigHost::run(
+            self,
+            validator.program,
+            validator.arguments,
+            validator.class,
+        )?;
         if checked.status != 0 {
             return Err(PhpOpError::PoolValidation {
                 stderr: checked.stderr,
             });
         }
 
-        let reloaded = ConfigHost::run(self, reload.program, reload.arguments)?;
+        let reloaded = ConfigHost::run(self, reload.program, reload.arguments, CallClass::Reload)?;
         if reloaded.status != 0 {
             return Err(PhpOpError::ReloadFailed {
                 stderr: reloaded.stderr,

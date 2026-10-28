@@ -1,6 +1,7 @@
 //! SetAccountLoginsLocked: every key into one account's home turned at once,
 //! and — on the locking direction — every session already inside it ended.
 
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::system::name::AccountName;
 use maran_distro::DistroAdapter;
 
@@ -11,6 +12,7 @@ use crate::logins::logins_error::LoginsError;
 use crate::logins::logins_host::LoginsHost;
 use crate::logins::model::account_lock_outcome::AccountLockOutcome;
 use crate::logins::resolve_managed_account::resolve_managed_account;
+use maran_agent_core::end_of_options::END_OF_OPTIONS;
 
 /// The flag that prefixes a password hash so nothing can match it.
 const LOCK: &str = "--lock";
@@ -183,6 +185,9 @@ const UNLOCK: &str = "--unlock";
 /// - [`LoginsError::SessionCullFailed`] when `pkill` refused. The logins are
 ///   locked and some of the account's processes may have been signalled, so the
 ///   suspension is reported as failed and is re-issued rather than believed.
+/// - [`LoginsError::Bound`] when `usermod`, `passwd -S` or `pkill` outran its
+///   deadline. Some logins may be locked and some not, exactly as for a
+///   refusal, so the suspension is reported as failed and is re-issued.
 pub fn set_account_logins_locked(
     host: &dyn LoginsHost,
     distro: &dyn DistroAdapter,
@@ -228,7 +233,14 @@ pub(crate) fn set_account_logins_locked_under_lock(
     let flag = if locked { LOCK } else { UNLOCK };
 
     for login in account_logins(host, distro, account)?.logins {
-        let outcome = host.run(distro.usermod_binary(), &[flag, &login.name])?;
+        // `usermod` parses with `getopt_long`, which honours the end-of-options
+        // marker on both families, so a login name can never be read as an
+        // option.
+        let outcome = host.run(
+            &distro.usermod_binary(),
+            &[flag, END_OF_OPTIONS, &login.name],
+            CallClass::Mutation,
+        )?;
         if outcome.status != 0 {
             return Err(LoginsError::SpawnFailed {
                 code: outcome.status,

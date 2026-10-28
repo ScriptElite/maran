@@ -1,6 +1,7 @@
 //! Why a per-account cron operation could not be done.
 
 use maran_agent_core::privs::priv_error::PrivError;
+use maran_agent_core::utils::bound_exceeded::BoundExceeded;
 use maran_agent_core::validation::system::managed_account_error::ManagedAccountError;
 
 /// The `code` reported when `crontab` could not be started, or could not be
@@ -90,6 +91,20 @@ pub enum CronError {
         /// could not be given a table to read.
         code: i32,
     },
+
+    /// `crontab` outlived its deadline and was killed together with its whole
+    /// process group.
+    ///
+    /// **Not a refusal**, and so never a [`Self::CrontabRefused`]: the program
+    /// was stopped before it answered, so the account's table may or may not have
+    /// been replaced, and the statement above that the live crontab is unchanged
+    /// holds for a refusal and not for this. The caller reads the table again
+    /// before it believes either outcome. A table larger than the read ceiling is
+    /// NOT this variant; it keeps its own code on [`Self::CrontabRefused`].
+    /// Carries the program's path and the deadline and never a byte the program
+    /// printed.
+    #[error(transparent)]
+    Bound(#[from] BoundExceeded),
 
     /// An entry's command file could not be written, or the account's cron
     /// directory could not be created.

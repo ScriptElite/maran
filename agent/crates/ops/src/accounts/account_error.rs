@@ -1,8 +1,11 @@
 //! Failures of the account operations.
 
 use maran_agent_core::command_outcome::CommandOutcome;
+use maran_agent_core::utils::bound_exceeded::BoundExceeded;
+use maran_agent_core::utils::spawn_error::SpawnError;
 use maran_agent_core::validation::system::managed_account_error::ManagedAccountError;
 use maran_agent_core::validation::system::name_error::NameError;
+use maran_distro::AdapterBinary;
 
 /// The most characters of a refusing tool's standard error the agent writes to
 /// its own log.
@@ -142,6 +145,22 @@ pub enum AccountError {
         /// Why it could not be started.
         reason: String,
     },
+
+    /// A program ran past its deadline or past its output ceiling and was killed,
+    /// together with its whole process group.
+    ///
+    /// **Not a verdict.** It says the agent stopped waiting, not what the program
+    /// would have answered or whether it finished its work on the host after the
+    /// kill, so it is never folded into [`Self::CommandFailed`] (a refusal), into
+    /// [`Self::CommandUnavailable`] (the tool is missing) or into any of the
+    /// removal variants, whose meaning is "the account still owns the resource".
+    /// An operation that was killed mid-way may have done its work; the caller
+    /// reads the account again before it believes either outcome.
+    ///
+    /// Carries the program's path and the bound, and never a byte the program
+    /// printed (rules/security.md item 8).
+    #[error(transparent)]
+    Bound(#[from] BoundExceeded),
 
     /// A command's output did not have the shape this agent knows how to read.
     #[error("could not read the output of {program}")]
@@ -316,6 +335,26 @@ impl AccountError {
     }
 }
 
+impl AccountError {
+    /// Folds a failed spawn of `program` into the account error surface.
+    ///
+    /// The one home of the mapping `SystemHost::run` needs: a bound the core
+    /// enforced ([`SpawnError::Bound`]) passes through as [`Self::Bound`], so a
+    /// program that was killed is never reported as one that is "unavailable";
+    /// every other failure is [`Self::CommandUnavailable`] naming `program` and the
+    /// core's reason. The core's error does not carry the program, which is why the
+    /// caller supplies it.
+    pub(crate) fn from_spawn(program: &AdapterBinary, error: SpawnError) -> Self {
+        match error {
+            SpawnError::Bound(bound) => Self::Bound(bound),
+            other => Self::CommandUnavailable {
+                program: program.to_string(),
+                reason: other.to_string(),
+            },
+        }
+    }
+}
+
 impl From<crate::php::PhpOpError> for AccountError {
     /// Reports a pool the account still owns as a refusal to delete the account.
     ///
@@ -325,9 +364,16 @@ impl From<crate::php::PhpOpError> for AccountError {
     /// was — and a caller matching on the PHP area's variants through the
     /// account area's error would be reaching across an area boundary
     /// (rules/rust.md "one error enum per area").
+    ///
+    /// A bound is the one exception and stays a bound: a pool removal that was
+    /// killed at its deadline has not established that the account still owns
+    /// the pool, and `PoolRemoval` says exactly that.
     fn from(error: crate::php::PhpOpError) -> Self {
-        Self::PoolRemoval {
-            reason: error.to_string(),
+        match error {
+            crate::php::PhpOpError::Bound(bound) => Self::Bound(bound),
+            other => Self::PoolRemoval {
+                reason: other.to_string(),
+            },
         }
     }
 }
@@ -340,9 +386,14 @@ impl From<crate::db::DbError> for AccountError {
     /// variants through the account area's error would be reaching across an
     /// area boundary, and what an operator has to act on is that the deletion
     /// did not happen and why.
+    ///
+    /// A bound stays a bound, for the reason the PHP conversion gives.
     fn from(error: crate::db::DbError) -> Self {
-        Self::DatabaseRemoval {
-            reason: error.to_string(),
+        match error {
+            crate::db::DbError::Bound(bound) => Self::Bound(bound),
+            other => Self::DatabaseRemoval {
+                reason: other.to_string(),
+            },
         }
     }
 }
@@ -350,9 +401,14 @@ impl From<crate::db::DbError> for AccountError {
 impl From<crate::sftp::SftpError> for AccountError {
     /// Reports an SFTP resource the account still owns as a refusal to delete
     /// it, flattened for the same reason the two conversions above are.
+    ///
+    /// A bound stays a bound, for the reason the PHP conversion gives.
     fn from(error: crate::sftp::SftpError) -> Self {
-        Self::SftpRemoval {
-            reason: error.to_string(),
+        match error {
+            crate::sftp::SftpError::Bound(bound) => Self::Bound(bound),
+            other => Self::SftpRemoval {
+                reason: other.to_string(),
+            },
         }
     }
 }
@@ -365,9 +421,14 @@ impl From<crate::ftps::FtpsError> for AccountError {
     /// deletion cascade cannot silently label an FTPS refusal as an SFTP one:
     /// the two areas have distinct error types, and the compiler picks the
     /// conversion by the type it is given.
+    ///
+    /// A bound stays a bound, for the reason the PHP conversion gives.
     fn from(error: crate::ftps::FtpsError) -> Self {
-        Self::FtpsRemoval {
-            reason: error.to_string(),
+        match error {
+            crate::ftps::FtpsError::Bound(bound) => Self::Bound(bound),
+            other => Self::FtpsRemoval {
+                reason: other.to_string(),
+            },
         }
     }
 }
@@ -377,9 +438,19 @@ impl From<crate::sites::SitesOpError> for AccountError {
     /// account's suspension state, flattened for the reason the three
     /// conversions above are: what a caller acts on is that the host could not
     /// be observed, not which of the site area's eleven variants it was.
+    ///
+    /// A bound stays a bound: a site read that was killed at its deadline is not
+    /// a statement that the sites could not be inspected.
     fn from(error: crate::sites::SitesOpError) -> Self {
-        Self::SiteInspection {
-            reason: error.to_string(),
+        match error {
+            crate::sites::SitesOpError::Bound(bound) => Self::Bound(bound),
+            other => Self::SiteInspection {
+                reason: other.to_string(),
+            },
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/accounts/account_error_tests.rs"]
+mod tests;

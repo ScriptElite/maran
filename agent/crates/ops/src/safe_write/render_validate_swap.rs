@@ -4,6 +4,8 @@ use std::fs::File;
 use std::io::Write as _;
 use std::path::Path;
 
+use maran_agent_core::utils::call_class::CallClass;
+
 use crate::safe_write::config_tree_lock::config_tree_lock;
 use crate::safe_write::model::write_intent::WriteIntent;
 use crate::safe_write::model::{Reload, Validator};
@@ -89,6 +91,14 @@ use crate::safe_write::{ConfigHost, RollbackGuard, SafeWriteError};
 /// validator or the reload could not be STARTED — a missing or unexecutable
 /// binary, which is a different job for an operator than either of them
 /// refusing — with the same restoration the refusal would have had. Returns
+/// [`SafeWriteError::Bound`] when the validator or the reload outlived its
+/// deadline or its output ceiling and was killed with its whole process group:
+/// again the same restoration, and the lock is released by the return like on
+/// any other exit. A bound is not a verdict, so it is never reported as a failed
+/// validation or a failed reload. After a reload bound the files are restored
+/// but the running service may already have loaded the new configuration, and
+/// nothing reloads again: disk and service can differ until the next reload
+/// (the same state a failed reload leaves, now also reachable by timeout). Returns
 /// [`SafeWriteError::RollbackFailed`] when a restoration required by one of
 /// the above also failed.
 pub fn write_config(
@@ -230,7 +240,7 @@ pub(super) fn swap_in(
 
     // Validate the configuration now that it is the real file at the real
     // path, so the validator sees exactly what nginx would.
-    let validation = match host.run(validator.program, validator.arguments) {
+    let validation = match host.run(validator.program, validator.arguments, validator.class) {
         Ok(outcome) => outcome,
         Err(error) => return finish_with_rollback(&mut guard, error),
     };
@@ -263,7 +273,7 @@ pub(super) fn swap_in(
 
     // Reload the service that reads the target so the new configuration
     // takes effect.
-    match host.run(reload.program, reload.arguments) {
+    match host.run(reload.program, reload.arguments, CallClass::Reload) {
         Ok(outcome) if outcome.status == 0 => {
             // Full success: the guard's job is done.
             guard.commit();

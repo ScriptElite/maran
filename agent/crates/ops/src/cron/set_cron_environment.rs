@@ -39,6 +39,9 @@ use crate::cron::model::crontab_document::CrontabDocument;
 ///   Checked first, before the crontab or the home is touched.
 /// - [`CronError::CrontabRefused`] when the crontab could not be read, or when
 ///   `crontab` refused the new table. The assignments stay as they were.
+/// - [`CronError::Bound`] when `crontab` outlived its deadline and was killed with its
+///   process group. Not a refusal: the table may or may not have been replaced, so the
+///   caller reads it again before it believes either outcome.
 pub fn set_cron_environment(
     host: &dyn CronHost,
     distro: &dyn DistroAdapter,

@@ -2,6 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::system::managed_account::ManagedAccount;
 
 use crate::logins::end_account_sessions::end_account_sessions;
@@ -26,7 +27,7 @@ fn managed() -> ManagedAccount {
 /// The argv the cull is expected to run, as a host's `ps` would show it.
 fn expected_argv(uid: u32) -> Vec<String> {
     vec![
-        distro().pkill_binary().to_owned(),
+        distro().pkill_binary().as_str().to_owned(),
         "--signal".to_owned(),
         "KILL".to_owned(),
         "--count".to_owned(),
@@ -100,5 +101,41 @@ fn a_refusing_pkill_fails_the_cull_rather_than_reporting_a_count() {
     assert!(
         matches!(refused, Err(LoginsError::SessionCullFailed { code: 2 })),
         "got {refused:?}"
+    );
+}
+
+#[test]
+fn the_cull_runs_as_a_mutation_and_names_no_end_of_options_marker() {
+    // Pins the class (a kill is a short state change, not a query: a Query
+    // deadline would also be 60 s but would read as a question to the next
+    // maintainer) and the inverse control of the `--` guard: the uid is the
+    // argument of `--uid`, so nothing follows it for a marker to protect, and a
+    // `--` in front of it would make `pkill` read the uid as an operand.
+    let host = FakeLoginsHost::with_passwd(&[account_row()]).with_process(ACCOUNT_UID);
+
+    end_account_sessions(&host, distro(), &managed()).expect("culled");
+
+    let spawns = host.spawns();
+    assert_eq!(spawns.len(), 1, "{spawns:?}");
+    assert_eq!(spawns[0].class, CallClass::Mutation);
+    assert!(
+        !spawns[0].argv.iter().any(|argument| argument == "--"),
+        "got {:?}",
+        spawns[0].argv
+    );
+}
+
+#[test]
+fn a_pkill_that_times_out_is_a_bound_and_not_a_count_of_zero() {
+    // How many processes were signalled before the kill is unknown, so the
+    // answer is an error. Zero would tell a suspension that nothing was running.
+    let host = FakeLoginsHost::with_passwd(&[account_row()]).with_process(ACCOUNT_UID);
+    host.time_out("pkill");
+
+    let failed = end_account_sessions(&host, distro(), &managed());
+
+    assert!(
+        matches!(failed, Err(LoginsError::Bound(_))),
+        "got {failed:?}"
     );
 }

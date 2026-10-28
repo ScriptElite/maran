@@ -65,12 +65,13 @@ pub trait CronHost: Send + Sync {
     ///
     /// Implementations MUST be called from `tokio::task::spawn_blocking`: they
     /// spawn a program and wait for it, which on a runtime worker stalls every
-    /// other in-flight command.
+    /// other in-flight command. The wait is bounded by the program's deadline.
     ///
     /// # Errors
     ///
     /// Returns [`CronError::CrontabRefused`] when the program refuses for any
-    /// other reason, or cannot be run at all.
+    /// other reason, cannot be run at all, or answers more than the read ceiling,
+    /// and [`CronError::Bound`] when it outlives its deadline and is killed.
     fn read_crontab(&self, account: &ManagedAccount) -> Result<Option<String>, CronError>;
 
     /// Replaces the account's crontab with `contents`, whole.
@@ -88,12 +89,14 @@ pub trait CronHost: Send + Sync {
     ///
     /// Implementations MUST be called from `tokio::task::spawn_blocking`: they
     /// spawn a program and wait for it, which on a runtime worker stalls every
-    /// other in-flight command.
+    /// other in-flight command. The wait is bounded by the program's deadline.
     ///
     /// # Errors
     ///
     /// Returns [`CronError::CrontabRefused`] when the program refuses the table
-    /// or cannot be given one at all.
+    /// or cannot be given one at all, and [`CronError::Bound`] when it outlives
+    /// its deadline and is killed, in which case the table may or may not have
+    /// been replaced.
     fn install_crontab(&self, account: &ManagedAccount, contents: &str) -> Result<(), CronError>;
 
     /// Mints an id for a new entry.

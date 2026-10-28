@@ -1,5 +1,9 @@
 //! Failures of the config-write protocol.
 
+use maran_agent_core::utils::bound_exceeded::BoundExceeded;
+use maran_agent_core::utils::spawn_error::SpawnError;
+use maran_distro::AdapterBinary;
+
 /// What can go wrong while rendering, validating, swapping in or reloading a
 /// system configuration file.
 ///
@@ -127,6 +131,20 @@ pub enum SafeWriteError {
         reason: String,
     },
 
+    /// The validator or the reload outlived its deadline, or wrote more than its
+    /// output ceiling, and was killed together with its whole process group.
+    ///
+    /// **Not a verdict on the configuration**, and so never a
+    /// [`Self::ValidationFailed`] or a [`Self::ReloadFailed`]: the program was
+    /// stopped before it could answer, and a reload that was killed may still have
+    /// taken effect in the service manager. It stands where the validator or the
+    /// reload would have stood, so the restoration that follows it is the
+    /// restoration that step would have had, and the config-tree lock is released
+    /// by the return. Carries the program's path and the bound and never a byte
+    /// the program printed.
+    #[error(transparent)]
+    Bound(#[from] BoundExceeded),
+
     /// The previous configuration could not be restored after a later step
     /// failed.
     ///
@@ -142,3 +160,28 @@ pub enum SafeWriteError {
         rollback_error: String,
     },
 }
+
+impl SafeWriteError {
+    /// Folds a failed spawn of `program` into the config-write error surface.
+    ///
+    /// The one home of a mapping every [`super::ConfigHost::run`] implementation
+    /// needs: a bound the core enforced ([`SpawnError::Bound`]) passes through as
+    /// [`Self::Bound`], so a deadline stays distinguishable from a refusal, and
+    /// every other failure becomes [`Self::SpawnFailed`] naming `program` and the
+    /// core's reason. The caller supplies the typed [`AdapterBinary`] so the
+    /// `program` field is the binary the host chose, not text parsed back out of
+    /// the core's message.
+    pub fn from_spawn(program: &AdapterBinary, error: SpawnError) -> Self {
+        match error {
+            SpawnError::Bound(bound) => Self::Bound(bound),
+            other => Self::SpawnFailed {
+                program: program.to_string(),
+                reason: other.to_string(),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/safe_write/safe_write_error_tests.rs"]
+mod tests;

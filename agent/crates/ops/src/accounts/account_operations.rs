@@ -1,12 +1,13 @@
 //! The account operations themselves, over whatever [`SystemHost`] they are given.
 
 use maran_agent_core::agent_paths::AgentPaths;
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::utils::system_accounts::system_accounts;
 use maran_agent_core::validation::system::managed_account::ManagedAccount;
 use maran_agent_core::validation::system::managed_account_error::ManagedAccountError;
 use maran_agent_core::validation::system::name::AccountName;
 
-use maran_distro::DistroAdapter;
+use maran_distro::{AdapterBinary, DistroAdapter};
 
 use crate::accounts::account_lock::take_account_lock;
 use crate::accounts::model::home_group_repair_refusal::HomeGroupRepairRefusal;
@@ -22,13 +23,14 @@ use crate::accounts::{
     AccountError, AccountSuspensionState, AccountUsage, CreatedAccount, StoredPassword, SystemHost,
 };
 use crate::cron::cron_lock::cron_lock;
-use crate::cron::{CronHost, NO_CRONTAB_MARKER, inspect_account_cron};
+use crate::cron::{CronError, CronHost, NO_CRONTAB_MARKER, inspect_account_cron};
 use crate::db::{DbHost, drop_account_databases};
 use crate::ftps::{FtpsHost, remove_account_ftps};
-use crate::logins::{LoginsHost, account_logins};
+use crate::logins::{LoginsError, LoginsHost, account_logins};
 use crate::php::{PhpHost, remove_account_pools};
 use crate::sftp::{SftpHost, remove_account_sftp};
 use crate::sites::{SiteHost, inspect_account_sites};
+use maran_agent_core::end_of_options::END_OF_OPTIONS;
 
 /// The argument that makes `passwd` REPORT a login's state instead of changing
 /// it.
@@ -183,6 +185,10 @@ impl<H: SystemHost> AccountOperations<H> {
     /// - [`AccountError::AlreadyExists`] when the user is already present.
     /// - [`AccountError::CommandFailed`] when `useradd`, the step that gives the
     ///   home directory to the web server's group, or `setquota` refuses.
+    /// - [`AccountError::Bound`] when a program it ran outlived its deadline or its output ceiling and
+    ///   was killed with its whole process group. Not a verdict: the step may have taken
+    ///   effect on the host, so the caller reads the account again before it believes
+    ///   either outcome.
     ///
     /// That step is named in prose rather than linked: it is private, and a public
     /// doc comment linking a private item is an error under `-D warnings`, which is
@@ -217,8 +223,18 @@ impl<H: SystemHost> AccountOperations<H> {
         // --create-home makes the directory and copies /etc/skel; --user-group gives
         // the account a group of its own, which is what makes per-account file modes
         // meaningful. Arguments are passed as an array — never a shell string.
-        self.expect_success(
-            self.distro.useradd_binary(),
+        //
+        // `--` before the name: `useradd` reads its options with `getopt_long`, which ends
+        // option parsing at `--` on both families (shadow-utils is the same package on
+        // Debian and RHEL), so a name can never be read as an option.
+        //
+        // A `useradd` killed at its deadline may have made the user or its home before it
+        // was stopped. Only that case is probed: when the user exists afterwards, this call
+        // created it (`user_exists` answered no a moment ago and the account lock is held),
+        // so the same rollback as any later step removes it and a retry is not met with
+        // `AlreadyExists`. Any other `useradd` failure is rolled back by shadow-utils itself.
+        if let Err(failure) = self.expect_success(
+            &self.distro.useradd_binary(),
             &[
                 "--create-home",
                 "--home-dir",
@@ -226,9 +242,18 @@ impl<H: SystemHost> AccountOperations<H> {
                 "--shell",
                 self.distro.nologin_shell(),
                 "--user-group",
+                END_OF_OPTIONS,
                 username,
             ],
-        )?;
+            CallClass::Mutation,
+        ) {
+            if matches!(failure, AccountError::Bound(_))
+                && self.host.user_exists(username).unwrap_or(false)
+            {
+                return Err(self.undo_creation(username, failure));
+            }
+            return Err(failure);
+        }
 
         // Everything from here on is rolled back by `undo_creation` if it fails, because
         // `useradd` has already happened and nothing above this line will undo it. Without
@@ -289,9 +314,14 @@ impl<H: SystemHost> AccountOperations<H> {
     /// case worth a log line, because the operator then has to remove the user by hand
     /// before any retry can succeed.
     fn undo_creation(&self, username: &str, failure: AccountError) -> AccountError {
-        if let Err(rollback_failure) =
-            self.expect_success(self.distro.userdel_binary(), &["--remove", username])
-        {
+        // `Mutation` and not `Bulk`: the account was created a moment ago, so its home holds
+        // only the skeleton and the removal is short. A wedged `userdel` here must not hold
+        // the account lock for the twelve hours of the `Bulk` class.
+        if let Err(rollback_failure) = self.expect_success(
+            &self.distro.userdel_binary(),
+            &["--remove", END_OF_OPTIONS, username],
+            CallClass::Mutation,
+        ) {
             tracing::warn!(
                 username,
                 %rollback_failure,
@@ -318,6 +348,10 @@ impl<H: SystemHost> AccountOperations<H> {
     ///   was run.
     /// - [`AccountError::HomeInspection`] when the password database cannot be
     ///   read; the operation refuses rather than guess.
+    /// - [`AccountError::Bound`] when `usermod` outlived its deadline or its output ceiling and
+    ///   was killed with its whole process group. Not a verdict: the step may have taken
+    ///   effect on the host, so the caller reads the account again before it believes
+    ///   either outcome.
     pub fn suspend(&self, name: &AccountName) -> Result<(), AccountError> {
         let account = self.resolve_managed(name)?;
         let username = account.name().as_str();
@@ -328,10 +362,20 @@ impl<H: SystemHost> AccountOperations<H> {
         //
         // The account already has the nologin shell from creation; setting it again is
         // what makes suspension correct for an account whose shell was changed by hand.
-        self.expect_success(self.distro.usermod_binary(), &["--lock", username])?;
         self.expect_success(
-            self.distro.usermod_binary(),
-            &["--shell", self.distro.nologin_shell(), username],
+            &self.distro.usermod_binary(),
+            &["--lock", END_OF_OPTIONS, username],
+            CallClass::Mutation,
+        )?;
+        self.expect_success(
+            &self.distro.usermod_binary(),
+            &[
+                "--shell",
+                self.distro.nologin_shell(),
+                END_OF_OPTIONS,
+                username,
+            ],
+            CallClass::Mutation,
         )?;
 
         Ok(())
@@ -387,17 +431,31 @@ impl<H: SystemHost> AccountOperations<H> {
     ///   the shell cannot be set.
     /// - [`AccountError::UnreadableOutput`] when the shadow entry does not have
     ///   the shape `<name>:<password>:…` for this account.
+    /// - [`AccountError::Bound`] when `getent` or `usermod` outlived its deadline or its output ceiling and
+    ///   was killed with its whole process group. Not a verdict: the step may have taken
+    ///   effect on the host, so the caller reads the account again before it believes
+    ///   either outcome.
     pub fn unsuspend(&self, name: &AccountName) -> Result<(), AccountError> {
         let account = self.resolve_managed(name)?;
         let username = account.name().as_str();
 
         if self.stored_password(username)? == StoredPassword::Locked {
-            self.expect_success(self.distro.usermod_binary(), &["--unlock", username])?;
+            self.expect_success(
+                &self.distro.usermod_binary(),
+                &["--unlock", END_OF_OPTIONS, username],
+                CallClass::Mutation,
+            )?;
         }
 
         self.expect_success(
-            self.distro.usermod_binary(),
-            &["--shell", self.distro.nologin_shell(), username],
+            &self.distro.usermod_binary(),
+            &[
+                "--shell",
+                self.distro.nologin_shell(),
+                END_OF_OPTIONS,
+                username,
+            ],
+            CallClass::Mutation,
         )?;
 
         Ok(())
@@ -485,6 +543,9 @@ impl<H: SystemHost> AccountOperations<H> {
     ///   enumeration used to live in and now covers both protocols; renaming it
     ///   is a wire-visible change and belongs with the task that widens the
     ///   contract.
+    /// - [`AccountError::Bound`] when `crontab`, `passwd`, `getent` or `id`
+    ///   outlived its deadline and was killed: neither of the two inspection
+    ///   variants above, because the read was stopped and not refused.
     /// - [`AccountError::CommandFailed`] or
     ///   [`AccountError::UnreadableOutput`] when `passwd -S` refuses or prints
     ///   something this agent cannot read for the account's OWN login.
@@ -502,16 +563,26 @@ impl<H: SystemHost> AccountOperations<H> {
         // blanket `From<SftpError>` means "the deletion did not happen", which
         // is the wrong sentence for an observation, and cron has no blanket
         // conversion for the same reason.
-        let cron = inspect_account_cron(cron_host, account.name()).map_err(|error| {
-            AccountError::CronInspection {
-                reason: error.to_string(),
-            }
-        })?;
-        let logins = account_logins(logins_host, self.distro, account.name()).map_err(|error| {
-            AccountError::SftpInspection {
-                reason: error.to_string(),
-            }
-        })?;
+        //
+        // A bound is the exception to both: a read that was killed at its deadline is not a
+        // statement that the cron table or the logins could not be inspected, so it comes
+        // back as the bound itself.
+        let cron =
+            inspect_account_cron(cron_host, account.name()).map_err(|error| match error {
+                CronError::Bound(bound) => AccountError::Bound(bound),
+                other => AccountError::CronInspection {
+                    reason: other.to_string(),
+                },
+            })?;
+        let logins =
+            account_logins(logins_host, self.distro, account.name()).map_err(
+                |error| match error {
+                    LoginsError::Bound(bound) => AccountError::Bound(bound),
+                    other => AccountError::SftpInspection {
+                        reason: other.to_string(),
+                    },
+                },
+            )?;
 
         Ok(AccountSuspensionState {
             login_locked: self.login_locked(username)?,
@@ -637,8 +708,14 @@ impl<H: SystemHost> AccountOperations<H> {
     /// - [`AccountError::Busy`] when another operation for this account — a
     ///   backup, a restore, an SFTP login creation, a pool write or another
     ///   deletion — is already running on this host.
+    /// - [`AccountError::Bound`] when a program outlived its deadline and was
+    ///   killed with its process group. Raised by a step before `userdel`, it
+    ///   leaves the account in place like the cases above; raised by `userdel`
+    ///   itself it says nothing about whether the account is gone, and the caller
+    ///   reads the account again before it believes either answer.
     ///
-    /// In every one of those cases `userdel` has NOT been run.
+    /// In every one of those cases except a bound at `userdel` itself, `userdel`
+    /// has NOT been run.
     pub fn delete(
         &self,
         php_host: &dyn PhpHost,
@@ -786,8 +863,9 @@ impl<H: SystemHost> AccountOperations<H> {
         }
 
         self.expect_success(
-            self.distro.userdel_binary(),
-            &["--remove", confirmed.name().as_str()],
+            &self.distro.userdel_binary(),
+            &["--remove", END_OF_OPTIONS, confirmed.name().as_str()],
+            CallClass::Bulk,
         )?;
 
         Ok(bytes_freed)
@@ -805,6 +883,10 @@ impl<H: SystemHost> AccountOperations<H> {
     /// - [`AccountError::HomeInspection`] when the password database or
     ///   `/proc/mounts` cannot be read.
     /// - [`AccountError::CommandFailed`] when `setquota` refuses.
+    /// - [`AccountError::Bound`] when `quotaon` or `setquota` outlived its deadline or its output ceiling and
+    ///   was killed with its whole process group. Not a verdict: the step may have taken
+    ///   effect on the host, so the caller reads the account again before it believes
+    ///   either outcome.
     pub fn set_quota(&self, name: &AccountName, quota_bytes: u64) -> Result<(), AccountError> {
         let account = self.resolve_managed(name)?;
         self.apply_quota(account.name().as_str(), quota_bytes)
@@ -821,6 +903,8 @@ impl<H: SystemHost> AccountOperations<H> {
     ///   read.
     /// - [`AccountError::UnreadableOutput`] when `quota` prints something this
     ///   agent cannot parse.
+    /// - [`AccountError::Bound`] when `quota` or `quotaon` outlived its deadline or its output
+    ///   ceiling and was killed with its whole process group. Nothing was changed.
     pub fn usage(&self, name: &AccountName) -> Result<AccountUsage, AccountError> {
         let account = self.resolve_managed(name)?;
         let username = account.name().as_str();
@@ -833,9 +917,11 @@ impl<H: SystemHost> AccountOperations<H> {
         // quota line (left over from before a remount, say) still prints.
         let quota = match self.quota_enforceability()? {
             Ok(()) => {
-                let outcome = self
-                    .host
-                    .run(self.distro.quota_binary(), &["-u", "-w", username])?;
+                let outcome = self.host.run(
+                    &self.distro.quota_binary(),
+                    &["-u", "-w", END_OF_OPTIONS, username],
+                    CallClass::Query,
+                )?;
                 match QuotaBlocks::parse_hard_limit(&outcome.stdout) {
                     Some(blocks) => QuotaState::Enforced(blocks),
                     None => QuotaState::EnforceableButUnset,
@@ -860,7 +946,8 @@ impl<H: SystemHost> AccountOperations<H> {
     /// Returns [`AccountError::CommandUnavailable`] when `quotaon` cannot be
     /// started, and [`AccountError::HomeInspection`] when `/proc/mounts`
     /// cannot be read. Neither is the same as "not enforceable" — both mean
-    /// this agent could not even ASK the question.
+    /// this agent could not even ASK the question. Returns [`AccountError::Bound`] when
+    /// `quotaon` outlived its deadline and was killed, which is likewise not an answer.
     fn quota_enforceability(&self) -> Result<Result<(), QuotaUnenforceableReason>, AccountError> {
         let mounts = self.host.read_mounts()?;
         // The MOUNT POINT holding the home root, not the home root itself. `quotaon -p /home`
@@ -870,9 +957,12 @@ impl<H: SystemHost> AccountOperations<H> {
         let Some(device) = quota_device_for(&mounts, AgentPaths::ACCOUNT_HOME_ROOT) else {
             return Ok(Err(QuotaUnenforceableReason::MountedWithoutQuotaAccounting));
         };
-        let quotaon = self
-            .host
-            .run(self.distro.quotaon_binary(), &["-p", device])?;
+        // A query: `quotaon -p` only prints whether accounting is on, it switches nothing.
+        let quotaon = self.host.run(
+            &self.distro.quotaon_binary(),
+            &["-p", END_OF_OPTIONS, device],
+            CallClass::Query,
+        )?;
 
         Ok(classify_quota_enforceability(
             &mounts,
@@ -890,7 +980,8 @@ impl<H: SystemHost> AccountOperations<H> {
     ///
     /// # Errors
     ///
-    /// Returns [`AccountError::CommandFailed`] when `setquota` refuses.
+    /// Returns [`AccountError::CommandFailed`] when `setquota` refuses and
+    /// [`AccountError::Bound`] when it outlived its deadline and was killed.
     fn apply_quota(&self, username: &str, quota_bytes: u64) -> Result<(), AccountError> {
         let blocks = QuotaBlocks::from_bytes(quota_bytes).as_argument();
 
@@ -911,8 +1002,18 @@ impl<H: SystemHost> AccountOperations<H> {
         })?;
 
         self.expect_success(
-            self.distro.setquota_binary(),
-            &["-u", username, &blocks, &blocks, "0", "0", device],
+            &self.distro.setquota_binary(),
+            &[
+                "-u",
+                END_OF_OPTIONS,
+                username,
+                &blocks,
+                &blocks,
+                "0",
+                "0",
+                device,
+            ],
+            CallClass::Mutation,
         )
     }
 
@@ -967,15 +1068,21 @@ impl<H: SystemHost> AccountOperations<H> {
     /// # Errors
     ///
     /// Returns [`AccountError::UnreadableOutput`] when `id` prints something other
-    /// than a number.
+    /// than a number, and [`AccountError::Bound`] when `id` outlived its deadline and was
+    /// killed.
     fn read_uid(&self, username: &str) -> Result<u32, AccountError> {
-        let outcome = self.host.run(self.distro.id_binary(), &["-u", username])?;
+        let program = self.distro.id_binary();
+        let outcome = self.host.run(
+            &program,
+            &["-u", END_OF_OPTIONS, username],
+            CallClass::Query,
+        )?;
         outcome
             .stdout
             .trim()
             .parse::<u32>()
             .map_err(|_| AccountError::UnreadableOutput {
-                program: self.distro.id_binary().to_owned(),
+                program: program.to_string(),
             })
     }
 
@@ -1031,9 +1138,13 @@ impl<H: SystemHost> AccountOperations<H> {
     /// `<name>:<password>:…` for this account.
     fn stored_password(&self, username: &str) -> Result<StoredPassword, AccountError> {
         let program = self.distro.getent_binary();
-        let outcome = self.host.run(program, &[SHADOW_DATABASE, username])?;
+        let outcome = self.host.run(
+            &program,
+            &[END_OF_OPTIONS, SHADOW_DATABASE, username],
+            CallClass::Query,
+        )?;
         if outcome.status != 0 {
-            return Err(AccountError::command_failed(program, &outcome));
+            return Err(AccountError::command_failed(program.as_str(), &outcome));
         }
 
         let mut fields = outcome
@@ -1046,18 +1157,35 @@ impl<H: SystemHost> AccountOperations<H> {
         match (fields.next(), fields.nth(SHADOW_PASSWORD_FIELD - 1)) {
             (Some(name), Some(field)) if name == username => Ok(StoredPassword::classify(field)),
             _ => Err(AccountError::UnreadableOutput {
-                program: program.to_owned(),
+                program: program.to_string(),
             }),
         }
     }
 
+    /// Reports whether the account's password is locked, from `passwd -S`.
+    ///
+    /// Reads the first line of the status output: the first field must be the
+    /// account name and the second is the state, which starts with `L` when the
+    /// login is locked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountError::Bound`] when `passwd` outlived its deadline or its
+    /// output ceiling, the host's error when it cannot be started, a command
+    /// failure when it exits non-zero, and [`AccountError::UnreadableOutput`] when
+    /// the first line does not name the account and a state.
     fn login_locked(&self, username: &str) -> Result<bool, AccountError> {
         let program = self.distro.passwd_binary();
-        let outcome = self
-            .host
-            .run(program, &[PASSWORD_STATUS_ARGUMENT, username])?;
+        // No `--` here, unlike every other call in this file: `passwd` is shadow-utils' on
+        // Debian and a `popt` program on RHEL, and only the first is known to end option
+        // parsing at `--` (checked on both polygon images before it is added).
+        let outcome = self.host.run(
+            &program,
+            &[PASSWORD_STATUS_ARGUMENT, username],
+            CallClass::Query,
+        )?;
         if outcome.status != 0 {
-            return Err(AccountError::command_failed(program, &outcome));
+            return Err(AccountError::command_failed(program.as_str(), &outcome));
         }
 
         let mut fields = outcome
@@ -1072,7 +1200,7 @@ impl<H: SystemHost> AccountOperations<H> {
                 Ok(state.starts_with(LOCKED_PASSWORD_PREFIX))
             }
             _ => Err(AccountError::UnreadableOutput {
-                program: program.to_owned(),
+                program: program.to_string(),
             }),
         }
     }
@@ -1122,17 +1250,22 @@ impl<H: SystemHost> AccountOperations<H> {
     ///
     /// Returns [`AccountError::CommandFailed`] when `crontab` refused for any
     /// other reason, so a table that could not be removed stops the deletion
-    /// while the account is still there to try again.
+    /// while the account is still there to try again, and [`AccountError::Bound`] when
+    /// `crontab` outlived its deadline and was killed.
     fn remove_crontab(&self, account: &ManagedAccount) -> Result<(), AccountError> {
         let program = self.distro.crontab_binary();
-        let outcome = self
-            .host
-            .run(program, &["-u", account.name().as_str(), "-r"])?;
+        // No `--`: `-r` is the last argument and no operand follows it, so there is nothing for
+        // a guard to protect.
+        let outcome = self.host.run(
+            &program,
+            &["-u", account.name().as_str(), "-r"],
+            CallClass::Mutation,
+        )?;
         if outcome.status == 0 || outcome.stderr.contains(NO_CRONTAB_MARKER) {
             return Ok(());
         }
 
-        Err(AccountError::command_failed(program, &outcome))
+        Err(AccountError::command_failed(program.as_str(), &outcome))
     }
 
     /// Runs a program and turns a non-zero exit into an error.
@@ -1142,14 +1275,20 @@ impl<H: SystemHost> AccountOperations<H> {
     /// Returns [`AccountError::CommandFailed`], which names the program and its
     /// exit status. The tool's own sentence does not travel in the error — it is
     /// written to the agent's log by `AccountError::command_failed`, for the
-    /// reason that variant sets out.
-    fn expect_success(&self, program: &str, arguments: &[&str]) -> Result<(), AccountError> {
-        let outcome = self.host.run(program, arguments)?;
+    /// reason that variant sets out, or [`AccountError::Bound`] when the program outlived
+    /// the deadline of `class` and was killed with its whole process group.
+    fn expect_success(
+        &self,
+        program: &AdapterBinary,
+        arguments: &[&str],
+        class: CallClass,
+    ) -> Result<(), AccountError> {
+        let outcome = self.host.run(program, arguments, class)?;
         if outcome.status == 0 {
             return Ok(());
         }
 
-        Err(AccountError::command_failed(program, &outcome))
+        Err(AccountError::command_failed(program.as_str(), &outcome))
     }
 
     /// Reports, or repairs, every hosting account whose home an earlier build
@@ -1232,6 +1371,10 @@ impl<H: SystemHost> AccountOperations<H> {
     ///   and the whole pass refuses up front — or when `chgrp` itself refuses.
     /// - [`AccountError::UnreadableOutput`] when `getent`'s row for the web
     ///   server's group is not the shape this agent knows how to read.
+    /// - [`AccountError::Bound`] when `getent` or `chgrp` outlived its deadline or its output ceiling and
+    ///   was killed with its whole process group. Not a verdict: the step may have taken
+    ///   effect on the host, so the caller reads the account again before it believes
+    ///   either outcome.
     pub fn repair_home_groups(
         &self,
         report_only: bool,
@@ -1356,12 +1499,14 @@ impl<H: SystemHost> AccountOperations<H> {
             }
 
             self.expect_success(
-                self.distro.chgrp_binary(),
+                &self.distro.chgrp_binary(),
                 &[
                     "--no-dereference",
+                    END_OF_OPTIONS,
                     self.distro.web_server_group(),
                     &repaired.home,
                 ],
+                CallClass::Mutation,
             )?;
             report.repaired.push(repaired);
         }
@@ -1382,17 +1527,22 @@ impl<H: SystemHost> AccountOperations<H> {
     /// [`AccountError::CommandFailed`] when `getent` exits non-zero — most
     /// plausibly because the group does not exist, i.e. no web server is
     /// installed — and [`AccountError::UnreadableOutput`] when its row is not
-    /// `<name>:<password>:<gid>:…` or the gid field is not a number.
+    /// `<name>:<password>:<gid>:…` or the gid field is not a number. Returns
+    /// [`AccountError::Bound`] when `getent` outlived its deadline and was killed.
     fn web_server_group_gid(&self) -> Result<u32, AccountError> {
         let program = self.distro.getent_binary();
         let group = self.distro.web_server_group();
-        let outcome = self.host.run(program, &[GROUP_DATABASE, group])?;
+        let outcome = self.host.run(
+            &program,
+            &[END_OF_OPTIONS, GROUP_DATABASE, group],
+            CallClass::Query,
+        )?;
         if outcome.status != 0 {
-            return Err(AccountError::command_failed(program, &outcome));
+            return Err(AccountError::command_failed(program.as_str(), &outcome));
         }
 
         let unreadable = || AccountError::UnreadableOutput {
-            program: program.to_owned(),
+            program: program.to_string(),
         };
 
         // The NAME is matched too, and not merely the gid field — the same
@@ -1474,7 +1624,8 @@ impl<H: SystemHost> AccountOperations<H> {
     /// server is installed. That is a failure and not something to shrug at: an account
     /// whose home the web server cannot enter is an account whose sites cannot be
     /// served, and reporting the creation as a success would hide it until a customer
-    /// noticed.
+    /// noticed. Returns [`AccountError::Bound`] when either program outlived its deadline
+    /// and was killed.
     fn open_home_to_the_web_server(&self, home: &str) -> Result<(), AccountError> {
         // `--no-dereference`, so a symlink standing where the home should be is
         // re-grouped as the link rather than followed to whatever it points at. Nothing
@@ -1482,8 +1633,14 @@ impl<H: SystemHost> AccountOperations<H> {
         // the account has no shell — but the flag costs nothing, and the alternative is a
         // root process following a link it did not verify.
         self.expect_success(
-            self.distro.chgrp_binary(),
-            &["--no-dereference", self.distro.web_server_group(), home],
+            &self.distro.chgrp_binary(),
+            &[
+                "--no-dereference",
+                END_OF_OPTIONS,
+                self.distro.web_server_group(),
+                home,
+            ],
+            CallClass::Mutation,
         )?;
 
         // Restated rather than assumed. `useradd` honours `HOME_MODE`/`UMASK` from
@@ -1492,7 +1649,11 @@ impl<H: SystemHost> AccountOperations<H> {
         // point of the group above, and this is the line that says what the panel
         // requires. Ownership of the home itself is `useradd`'s and is untouched — the
         // account owns its own home; only the group changed.
-        self.expect_success(self.distro.chmod_binary(), &["0750", home])
+        self.expect_success(
+            &self.distro.chmod_binary(),
+            &[END_OF_OPTIONS, "0750", home],
+            CallClass::Mutation,
+        )
     }
 }
 

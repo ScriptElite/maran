@@ -14,6 +14,8 @@ use std::sync::Mutex;
 
 use crate::accounts::model::home_metadata::HomeMetadata;
 
+use maran_agent_core::utils::bound_exceeded::BoundExceeded;
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::db::database_name::DatabaseName;
 use maran_agent_core::validation::db::db_user_name::DbUserName;
 use maran_agent_core::validation::secrets::password::Password;
@@ -21,7 +23,7 @@ use maran_agent_core::validation::system::managed_account_error::ManagedAccountE
 use maran_agent_core::validation::system::name::AccountName;
 use maran_agent_core::validation::web::php_version::PhpVersion;
 
-use maran_distro::{DistroFamily, adapter_for};
+use maran_distro::{AdapterBinary, DistroFamily, adapter_for};
 
 use crate::accounts::{
     AccountError, AccountOperations, CommandOutcome, HomeGroupRepairRefusal, StoredPassword,
@@ -121,6 +123,17 @@ struct RecordingHost {
     /// quota-enforceability tests. Defaults to "enabled", for the same reason
     /// as `mounts` above.
     quotaon_stdout: Mutex<String>,
+
+    /// The call class of every spawn, as `(program path, class)`, in order.
+    ///
+    /// The class decides how long a wedged program may hold the account lock, so
+    /// the one that is run for a whole home (`userdel --remove`) and the ones that
+    /// are not are pinned by it.
+    classes: Mutex<Vec<(String, CallClass)>>,
+
+    /// The program path whose spawn outlives its deadline, so the host answers
+    /// with a bound instead of an outcome.
+    timing_out: Mutex<Option<String>>,
 }
 
 impl RecordingHost {
@@ -145,7 +158,29 @@ impl RecordingHost {
             quotaon_stdout: Mutex::new(
                 "Quota for users are enabled on mountpoint /home\n".to_owned(),
             ),
+            classes: Mutex::new(Vec::new()),
+            timing_out: Mutex::new(None),
         }
+    }
+
+    /// Makes every spawn of the tool at `program` outlive its deadline.
+    fn with_timeout_of(self, program: &str) -> Self {
+        *self
+            .timing_out
+            .lock()
+            .expect("the fixture lock is never poisoned") = Some(program.to_owned());
+        self
+    }
+
+    /// The call class of every spawn of the tool at `program`, in order.
+    fn classes_of(&self, program: &str) -> Vec<CallClass> {
+        self.classes
+            .lock()
+            .expect("the fixture lock is never poisoned")
+            .iter()
+            .filter(|(path, _)| path == program)
+            .map(|(_, class)| *class)
+            .collect()
     }
 
     /// Sets what `read_mounts` returns, for the "not mounted with quota
@@ -316,7 +351,29 @@ impl RecordingHost {
 }
 
 impl SystemHost for RecordingHost {
-    fn run(&self, program: &str, arguments: &[&str]) -> Result<CommandOutcome, AccountError> {
+    fn run(
+        &self,
+        program: &AdapterBinary,
+        arguments: &[&str],
+        class: CallClass,
+    ) -> Result<CommandOutcome, AccountError> {
+        self.classes
+            .lock()
+            .expect("the fixture lock is never poisoned")
+            .push((program.to_string(), class));
+        if self
+            .timing_out
+            .lock()
+            .expect("the fixture lock is never poisoned")
+            .as_deref()
+            == Some(program.as_str())
+        {
+            return Err(AccountError::Bound(BoundExceeded::TimedOut {
+                program: program.to_string(),
+                deadline: class.deadline(),
+            }));
+        }
+        let program = program.as_str();
         let status = self
             .statuses
             .lock()
@@ -330,13 +387,13 @@ impl SystemHost for RecordingHost {
                 .clone()
         } else {
             match (
-                arguments.first(),
+                arguments.contains(&"shadow"),
                 self.shadow
                     .lock()
                     .expect("the fixture lock is never poisoned")
                     .clone(),
             ) {
-                (Some(&"shadow"), Some(entry)) => entry,
+                (true, Some(entry)) => entry,
                 _ => self
                     .stdout
                     .lock()
@@ -500,6 +557,7 @@ fn creating_an_account_makes_the_user_its_home_and_its_own_group() {
             "--shell",
             "/usr/sbin/nologin",
             "--user-group",
+            "--",
             "acme",
         ]
     );
@@ -603,6 +661,7 @@ fn a_creation_whose_quota_step_fails_takes_the_system_user_back_out() {
             // --remove, or the home stays behind and the next attempt adopts a directory
             // this agent cannot vouch for.
             "--remove",
+            "--",
             "acme"
         ]]
     );
@@ -628,6 +687,7 @@ fn a_creation_whose_home_permissions_fail_takes_the_system_user_back_out() {
         vec![vec![
             tool_path(&operations, "userdel").as_str(),
             "--remove",
+            "--",
             "acme"
         ]]
     );
@@ -851,7 +911,8 @@ fn unsuspending_asks_getent_for_this_accounts_shadow_entry_only() {
     assert_eq!(
         getent[0],
         vec![
-            operations.distro().getent_binary().to_owned(),
+            operations.distro().getent_binary().to_string(),
+            "--".to_owned(),
             "shadow".to_owned(),
             "acme".to_owned(),
         ]
@@ -921,9 +982,9 @@ fn a_locked_login_is_observed_as_locked_rather_than_assumed_from_the_suspend_cal
     assert_eq!(
         operations
             .host()
-            .called(operations.distro().passwd_binary()),
+            .called(operations.distro().passwd_binary().as_str()),
         vec![vec![
-            operations.distro().passwd_binary().to_owned(),
+            operations.distro().passwd_binary().to_string(),
             "-S".to_owned(),
             "acme".to_owned(),
         ]],
@@ -1165,6 +1226,7 @@ fn deleting_removes_the_home_tree_and_reports_what_it_freed() {
         vec![
             tool_path(&operations, "userdel").as_str(),
             "--remove",
+            "--",
             "acme"
         ]
     );
@@ -1186,6 +1248,7 @@ fn a_quota_is_set_in_kibibyte_blocks_rounded_up() {
         vec![
             tool_path(&operations, "setquota").as_str(),
             "-u",
+            "--",
             "acme",
             "2",
             "2",
@@ -1367,7 +1430,7 @@ fn tool_path(operations: &AccountOperations<RecordingHost>, program: &str) -> St
         "getent" => distro.getent_binary(),
         other => panic!("the accounts area never runs {other}"),
     }
-    .to_owned()
+    .to_string()
 }
 
 #[test]
@@ -1401,6 +1464,7 @@ fn a_new_accounts_home_is_group_owned_by_the_web_server_so_a_site_can_be_served(
         vec![
             tool_path(&operations, "chgrp").as_str(),
             "--no-dereference",
+            "--",
             "www-data",
             "/home/acme"
         ],
@@ -1423,6 +1487,7 @@ fn a_new_accounts_home_is_not_opened_to_every_other_local_user() {
         chmod[0],
         vec![
             tool_path(&operations, "chmod").as_str(),
+            "--",
             "0750",
             "/home/acme"
         ]
@@ -1452,6 +1517,7 @@ fn the_web_server_group_is_the_familys_own_never_a_literal() {
         vec![
             tool_path(&on_rhel, "chgrp").as_str(),
             "--no-dereference",
+            "--",
             "nginx",
             "/home/acme"
         ]
@@ -2423,6 +2489,7 @@ fn a_live_pass_repairs_a_stale_home_and_leaves_an_already_correct_one_alone() {
         vec![
             "/usr/bin/chgrp",
             "--no-dereference",
+            "--",
             "www-data",
             stale_home.as_str()
         ]
@@ -3079,7 +3146,12 @@ fn a_creation_whose_account_would_not_be_manageable_is_rolled_back() {
     );
     assert_eq!(
         operations_calls(&operations, "userdel")[0],
-        vec![tool_path(&operations, "userdel").as_str(), "--remove", user]
+        vec![
+            tool_path(&operations, "userdel").as_str(),
+            "--remove",
+            "--",
+            user
+        ]
     );
 }
 
@@ -3124,4 +3196,293 @@ fn the_home_group_repair_skips_users_the_panel_does_not_manage_and_still_reports
         "only the hosting account is re-grouped: {chgrp:?}"
     );
     assert!(chgrp[0].contains(&ok_home));
+}
+
+/// Every program-running flow the accounts area has, each against its own host, and the
+/// argv of every spawn they made.
+fn every_flow_calls() -> Vec<Vec<String>> {
+    let mut calls = Vec::new();
+
+    let created = debian(RecordingHost::new());
+    created
+        .create(&name(), 1024 * 1024)
+        .expect("creation succeeds");
+    calls.extend(created.host().calls());
+
+    let suspended = debian(RecordingHost::new().with_user("acme"));
+    suspended.suspend(&name()).expect("suspension succeeds");
+    calls.extend(suspended.host().calls());
+
+    let unsuspended = debian(
+        RecordingHost::new()
+            .with_user("acme")
+            .with_stdout(&shadow_entry(&format!("!{HASHED_PASSWORD}"))),
+    );
+    unsuspended
+        .unsuspend(&name())
+        .expect("unsuspension succeeds");
+    calls.extend(unsuspended.host().calls());
+
+    let measured = debian(RecordingHost::new().with_user("acme").with_size(2048));
+    measured.usage(&name()).expect("usage is read");
+    calls.extend(measured.host().calls());
+
+    let observed = debian(
+        RecordingHost::new()
+            .with_user("acme")
+            .with_stdout(&password_status("L"))
+            .with_shadow_field(&format!("!{HASHED_PASSWORD}")),
+    );
+    observed
+        .suspension_state(
+            &FakeSiteHost::passing(),
+            &quiet_cron_host(),
+            &quiet_logins_host(),
+            &name(),
+        )
+        .expect("the state is readable");
+    calls.extend(observed.host().calls());
+
+    let deleted = debian(RecordingHost::new().with_user("acme").with_size(4096));
+    deleted
+        .delete_under_lock(
+            &FakePhpHost::empty(),
+            &no_databases(),
+            &no_sftp(),
+            &no_ftps(),
+            &name(),
+        )
+        .expect("deletion succeeds");
+    calls.extend(deleted.host().calls());
+
+    calls
+}
+
+/// The tools whose parser is known to end option parsing at `--` on both families.
+const GUARDED_TOOLS: [&str; 10] = [
+    "useradd", "usermod", "userdel", "getent", "id", "quota", "quotaon", "setquota", "chmod",
+    "chgrp",
+];
+
+/// The tools that must NOT get one: `passwd` is not known to honour it on the RHEL family,
+/// and `crontab -r` has no operand after its last option.
+const UNGUARDED_TOOLS: [&str; 2] = ["passwd", "crontab"];
+
+#[test]
+fn every_guarded_tool_receives_end_of_options_before_its_operands() {
+    let calls = every_flow_calls();
+    let operations = debian(RecordingHost::new());
+
+    for tool in GUARDED_TOOLS {
+        let path = tool_path(&operations, tool);
+        let ran: Vec<&Vec<String>> = calls.iter().filter(|call| call[0] == path).collect();
+        // The positive control: the flows above really ran this tool, so the loop below
+        // is not a loop over nothing.
+        assert!(!ran.is_empty(), "no flow ran {tool}");
+
+        for call in ran {
+            let position = call
+                .iter()
+                .position(|argument| argument == "--")
+                .unwrap_or_else(|| panic!("{tool} ran without `--`: {call:?}"));
+            assert_eq!(
+                call.iter().filter(|argument| *argument == "--").count(),
+                1,
+                "{tool} must carry exactly one `--`: {call:?}"
+            );
+            assert!(
+                call[position + 1..]
+                    .iter()
+                    .all(|operand| !operand.starts_with('-')),
+                "{tool} has an option after `--`, where it would be read as an operand: {call:?}"
+            );
+            assert!(
+                position + 1 < call.len(),
+                "{tool} has nothing after `--`, which protects no operand: {call:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_tools_that_are_not_known_to_honour_end_of_options_are_not_given_one() {
+    let calls = every_flow_calls();
+    let operations = debian(RecordingHost::new());
+
+    for tool in UNGUARDED_TOOLS {
+        let path = tool_path(&operations, tool);
+        let ran: Vec<&Vec<String>> = calls.iter().filter(|call| call[0] == path).collect();
+        assert!(!ran.is_empty(), "no flow ran {tool}");
+        for call in ran {
+            assert!(
+                !call.contains(&"--".to_owned()),
+                "{tool} was given a `--` it is not known to accept: {call:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn creating_an_account_runs_useradd_as_a_mutation() {
+    let operations = debian(RecordingHost::new());
+
+    operations.create(&name(), 0).expect("creation succeeds");
+
+    assert_eq!(
+        operations
+            .host()
+            .classes_of(&tool_path(&operations, "useradd")),
+        vec![CallClass::Mutation]
+    );
+}
+
+#[test]
+fn deleting_an_account_removes_the_home_in_the_bulk_class() {
+    // `userdel --remove` removes a whole home, which scales with the customer's data. In
+    // the 120 s mutation class it would be killed in the middle of the removal.
+    let operations = debian(RecordingHost::new().with_user("acme").with_size(4096));
+
+    operations
+        .delete_under_lock(
+            &FakePhpHost::empty(),
+            &no_databases(),
+            &no_sftp(),
+            &no_ftps(),
+            &name(),
+        )
+        .expect("deletion succeeds");
+
+    assert_eq!(
+        operations
+            .host()
+            .classes_of(&tool_path(&operations, "userdel")),
+        vec![CallClass::Bulk]
+    );
+    // And the crontab removals around it are short mutations, not bulk. There are two on
+    // purpose: the sweep before the pools are touched, and the second one under the cron lock
+    // after the last wait (see `delete_under_lock`).
+    assert_eq!(
+        operations
+            .host()
+            .classes_of(&tool_path(&operations, "crontab")),
+        vec![CallClass::Mutation, CallClass::Mutation]
+    );
+}
+
+#[test]
+fn the_rollback_of_a_failed_creation_removes_the_user_in_the_mutation_class_and_not_bulk() {
+    // The home was created a moment ago and holds only the skeleton, so a wedged `userdel`
+    // here must not hold the account lock for the twelve hours of the bulk class.
+    let operations = debian(
+        RecordingHost::new()
+            .failing_next(0)
+            .failing_next(1)
+            .failing_next(0),
+    );
+
+    operations
+        .create(&name(), 0)
+        .expect_err("a refusing chgrp fails the creation");
+
+    assert_eq!(
+        operations
+            .host()
+            .classes_of(&tool_path(&operations, "userdel")),
+        vec![CallClass::Mutation]
+    );
+}
+
+#[test]
+fn the_questions_the_operations_ask_the_host_run_as_queries() {
+    let operations = debian(
+        RecordingHost::new()
+            .with_user("acme")
+            .with_stdout(&password_status("L"))
+            .with_shadow_field(&format!("!{HASHED_PASSWORD}")),
+    );
+
+    operations
+        .suspension_state(
+            &FakeSiteHost::passing(),
+            &quiet_cron_host(),
+            &quiet_logins_host(),
+            &name(),
+        )
+        .expect("the state is readable");
+
+    for tool in ["passwd", "getent"] {
+        assert_eq!(
+            operations.host().classes_of(&tool_path(&operations, tool)),
+            vec![CallClass::Query],
+            "{tool} only reads"
+        );
+    }
+}
+
+#[test]
+fn a_useradd_that_outlives_its_deadline_fails_the_creation_as_a_bound_and_not_as_a_refusal() {
+    // The tool ran and was stopped. `CommandFailed` says it refused, and
+    // `CommandUnavailable` says it is not installed; both would send an operator the
+    // wrong way.
+    let useradd = adapter_for(DistroFamily::Debian)
+        .useradd_binary()
+        .to_string();
+    let operations = debian(RecordingHost::new().with_timeout_of(&useradd));
+
+    let error = operations
+        .create(&name(), 0)
+        .expect_err("a killed useradd fails the creation");
+
+    assert!(matches!(error, AccountError::Bound(_)), "{error:?}");
+}
+
+#[test]
+fn a_userdel_that_outlives_its_deadline_fails_the_deletion_as_a_bound() {
+    let userdel = adapter_for(DistroFamily::Debian)
+        .userdel_binary()
+        .to_string();
+    let operations = debian(
+        RecordingHost::new()
+            .with_user("acme")
+            .with_timeout_of(&userdel),
+    );
+
+    let error = operations
+        .delete_under_lock(
+            &FakePhpHost::empty(),
+            &no_databases(),
+            &no_sftp(),
+            &no_ftps(),
+            &name(),
+        )
+        .expect_err("a killed userdel fails the deletion");
+
+    assert!(matches!(error, AccountError::Bound(_)), "{error:?}");
+}
+
+#[test]
+fn a_crontab_removal_that_outlives_its_deadline_aborts_the_deletion_before_userdel() {
+    // The inverse control for the test above: a bound BEFORE `userdel` leaves the account
+    // in place, so `userdel` never runs.
+    let crontab = adapter_for(DistroFamily::Debian)
+        .crontab_binary()
+        .to_string();
+    let operations = debian(
+        RecordingHost::new()
+            .with_user("acme")
+            .with_timeout_of(&crontab),
+    );
+
+    let error = operations
+        .delete_under_lock(
+            &FakePhpHost::empty(),
+            &no_databases(),
+            &no_sftp(),
+            &no_ftps(),
+            &name(),
+        )
+        .expect_err("a killed crontab aborts the deletion");
+
+    assert!(matches!(error, AccountError::Bound(_)), "{error:?}");
+    assert!(operations_calls(&operations, "userdel").is_empty());
 }

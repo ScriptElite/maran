@@ -1,5 +1,8 @@
 //! The seam between account operations and the machine they run on.
 
+use maran_agent_core::utils::call_class::CallClass;
+use maran_distro::AdapterBinary;
+
 use crate::accounts::model::home_metadata::HomeMetadata;
 use crate::accounts::{AccountError, CommandOutcome};
 
@@ -16,14 +19,25 @@ use crate::accounts::{AccountError, CommandOutcome};
 /// (rules/security.md item 3): the account name is caller-supplied, and a shell
 /// would turn a name this crate has validated into a string a shell re-parses.
 pub trait SystemHost: Send + Sync {
-    /// Runs `program` with `arguments` and waits for it.
+    /// Runs `program` with `arguments` and waits for it, no longer than `class`
+    /// allows.
+    ///
+    /// `program` is an [`AdapterBinary`], the adapter's own absolute path for a
+    /// tool, so nothing but the distribution adapter can name what root executes.
     ///
     /// # Errors
     ///
     /// Returns [`AccountError::CommandUnavailable`] when the program cannot be
-    /// started at all. A non-zero exit is NOT an error here — it is returned in
+    /// started at all, and [`AccountError::Bound`] when it outlived its deadline
+    /// or wrote more than its output ceiling and was killed with its whole
+    /// process group. A non-zero exit is NOT an error here — it is returned in
     /// the outcome, because each caller reads the status differently.
-    fn run(&self, program: &str, arguments: &[&str]) -> Result<CommandOutcome, AccountError>;
+    fn run(
+        &self,
+        program: &AdapterBinary,
+        arguments: &[&str],
+        class: CallClass,
+    ) -> Result<CommandOutcome, AccountError>;
 
     /// Reports whether a system user exists, by every name source the host is
     /// configured with.

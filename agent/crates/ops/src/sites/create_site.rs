@@ -64,7 +64,9 @@ use crate::sites::{SiteHost, SitesOpError};
 /// site's own vhost appeared while this creation was running — again with no
 /// vhost left behind — [`SitesOpError::ReloadFailed`] when the
 /// reload refuses it, and [`SitesOpError::ConfigWrite`] for any other failure
-/// of the write protocol.
+/// of the write protocol. Returns [`SitesOpError::Bound`] when `nginx -t` or the reload
+/// outlived its deadline and was killed, again with no vhost left behind; a bound is no
+/// verdict on the vhost, so it is never one of the refusals above.
 ///
 /// A refusal at the vhost leaves what came before it: the document root, the
 /// log directory and, for a PHP site, the account's pool for that version. None

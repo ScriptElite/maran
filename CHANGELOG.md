@@ -5,6 +5,40 @@ than a strict category list: what changed and why it matters to somebody running
 
 ## Unreleased
 
+**A hung program could freeze the root agent and block every other customer's writes.** Every program
+the agent runs as root was started without a deadline, without an output limit and in the agent's own
+process group. Measured with a validator that never exits, held under the host-wide configuration lock:
+after 75 seconds the call was still running, another tenant's write was still blocked, and both the
+program and its child were alive. A program that printed 5 MiB was held entirely in memory. The agent
+now starts every program through one bounded path:
+
+- **A deadline per kind of call.** Checks and reads get 60 seconds, ordinary changes 120, service
+  reloads 240, database statements 300, package installs 2100, and backup work up to 12 hours. At the
+  deadline the whole process group is killed, not only the leader, and then collected. Measured: the
+  call returned a typed timeout at 60.0 seconds, the program and its child were gone, the previous
+  file content was restored and the other tenant's write finished 3 ms later.
+- **A cap on captured output**, 4 MiB per stream by default. Going over it kills the program and is an
+  error that returns none of the output; exactly 4 MiB is still accepted.
+- **Standard input is never inherited** and the cleared environment is kept.
+- **Programs are named by a type that only the distro layer can create**, always by absolute path, so
+  a bare string can no longer reach a spawn. `--` now ends the options before a user or unit operand
+  wherever the tool supports it.
+- **`tar --list` is bounded** (2,000,000 members, 16 KiB per name, 256 MiB of listing), and a backup is
+  listed once as it is written, so one that restore would refuse is refused at creation. Database
+  clients also ask the server to stop waiting on a lock after 240 seconds.
+
+A timeout reaches the panel as the existing `SYSTEM_FAILURE` code with no tool output, inside a normal
+response, not as a gRPC `DEADLINE_EXCEEDED`: the proto is unchanged and no new error code exists. The
+agent sets no server-wide timeout or concurrency limit, because that would free nothing and would
+report failure for a write that then succeeds. The systemd sandbox needed no syscall or capability
+change.
+
+Known residuals: a killed program's work already handed to the service manager or a database server
+may still finish; backups written by earlier releases are not re-checked; a deadline-kill under the
+real systemd sandbox and the agent-to-API handshake were not measured on the build machine. This
+change alters how the only root process starts every program and needs a second human review before
+it reaches `main` (#90).
+
 **A signed-in customer could reach any API endpoint that forgot to declare its authorization.** The
 fallback policy, which applies to every endpoint with no authorization metadata, only required a
 signed-in user at customer level. Measured against a test-only endpoint with no metadata: a customer

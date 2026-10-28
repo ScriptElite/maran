@@ -3,11 +3,13 @@
 
 use std::path::Path;
 
+use maran_agent_core::utils::call_class::CallClass;
 use maran_distro::DistroAdapter;
 
 use crate::safe_write::model::{Reload, Validator};
 use crate::sites::write_vhost::{RELOAD_SUBCOMMAND, VALIDATE_ARGUMENT};
 use crate::sites::{SiteHost, SitesOpError};
+use maran_agent_core::end_of_options::END_OF_OPTIONS;
 
 /// The words nginx prints, at `warn`, when a server block names a host that a
 /// server block it read earlier on the same listen address already names —
@@ -84,8 +86,9 @@ const CONFLICTING_SERVER_NAME_WARNING: &str = "conflicting server name";
 /// `target` or when `nginx -t` reports one of `served_names` as served twice —
 /// with nothing left at `target` in either case. Otherwise as
 /// [`super::write_vhost::write_vhost`]: [`SitesOpError::NginxValidation`],
-/// [`SitesOpError::ReloadFailed`] or [`SitesOpError::ConfigWrite`], with the
-/// new vhost removed again.
+/// [`SitesOpError::ReloadFailed`], [`SitesOpError::Bound`] (a program killed at
+/// its deadline, which is no verdict on the vhost) or [`SitesOpError::ConfigWrite`],
+/// with the new vhost removed again.
 pub(crate) fn create_vhost(
     host: &dyn SiteHost,
     distro: &dyn DistroAdapter,
@@ -93,13 +96,21 @@ pub(crate) fn create_vhost(
     contents: &str,
     served_names: &[&str],
 ) -> Result<(), SitesOpError> {
+    let nginx = distro.nginx_binary();
+    let service_manager = distro.service_manager();
+    // A pure check, so the short class: `nginx -t` reads the tree and changes nothing.
     let validator = Validator {
-        program: distro.nginx_binary(),
+        program: &nginx,
         arguments: &[VALIDATE_ARGUMENT],
+        class: CallClass::Validate,
     };
-    let reload_arguments = [RELOAD_SUBCOMMAND, distro.nginx_service()];
+    // `--` before the unit: `systemctl` reads its options with `getopt_long`, which ends
+    // option parsing at `--`. The program is the adapter's absolute path, and a bare
+    // `"systemctl"` would be worse than a literal, because a root process would then
+    // resolve it through `PATH`.
+    let reload_arguments = [RELOAD_SUBCOMMAND, END_OF_OPTIONS, distro.nginx_service()];
     let reload = Reload {
-        program: distro.service_manager(),
+        program: &service_manager,
         arguments: &reload_arguments,
     };
     let refused_warnings: Vec<String> = served_names

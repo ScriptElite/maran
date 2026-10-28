@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use maran_agent_core::utils::call_class::CallClass;
 use maran_distro::DistroAdapter;
 use maran_templates::systemd::unit::MountUnit;
 
@@ -12,6 +13,7 @@ use crate::sftp::model::sftp_user_request::SftpUserRequest;
 use crate::sftp::set_sftp_password::write_password;
 use crate::sftp::sftp_error::SftpError;
 use crate::sftp::sftp_host::SftpHost;
+use maran_agent_core::end_of_options::END_OF_OPTIONS;
 
 /// The mode the jail and its mount point are created with.
 ///
@@ -135,6 +137,9 @@ const START_NOW: &str = "--now";
 /// - [`SftpError::PasswordRejected`] when `chpasswd` refuses the password.
 /// - [`SftpError::SpawnFailed`] when `useradd` refuses for any other reason, or
 ///   could not be run at all.
+/// - [`SftpError::Bound`] when `useradd`, `chpasswd` or the service manager
+///   outran its deadline. Whether the login exists is then unknown, and a repeat
+///   converges on [`SftpError::AlreadyExists`] if it does.
 /// - [`SftpError::AccountBusy`] when another operation for the hosting account
 ///   — a deletion, a backup, a restore or a pool write — is already running.
 /// - [`SftpError::AccountIdentityChanged`] when the account's uid or gid moved,
@@ -205,8 +210,11 @@ pub(crate) fn create_sftp_user_under_lock(
     // request carried, so there is nothing here for a caller to influence.
     let (uid, gid) = (ownership.uid.to_string(), ownership.gid.to_string());
 
+    // `useradd` parses with `getopt_long`, which honours the end-of-options
+    // marker on both families, so the login name that follows it can never be
+    // read as an option.
     let outcome = host.run(
-        distro.useradd_binary(),
+        &distro.useradd_binary(),
         &[
             HOME_DIRECTORY,
             jail.directory(),
@@ -220,9 +228,11 @@ pub(crate) fn create_sftp_user_under_lock(
             &uid,
             GID,
             &gid,
+            END_OF_OPTIONS,
             request.user.as_str(),
         ],
         None,
+        CallClass::Mutation,
     )?;
 
     if outcome.status != 0 {
@@ -256,7 +266,8 @@ pub(crate) fn create_sftp_user_under_lock(
 /// # Errors
 ///
 /// Returns [`SftpError::JailFailed`] when a directory cannot be created, the
-/// unit cannot be rendered, or the protocol refuses it.
+/// unit cannot be rendered, or the protocol refuses it. Returns
+/// [`SftpError::Bound`] when the service manager outruns its deadline.
 fn ensure_jail(
     host: &dyn SftpHost,
     distro: &dyn DistroAdapter,
@@ -273,17 +284,23 @@ fn ensure_jail(
     .render_config()
     .map_err(|_| SftpError::JailFailed)?;
 
+    // The absolute path of the service manager, from the adapter. `ops` names no
+    // binary path of its own, and a bare `"systemctl"` would be worse than the
+    // literal it replaced: a root process would resolve the program through
+    // `PATH`.
+    let service_manager = distro.service_manager();
     let validator = Validator {
-        // The absolute path of the service manager, from the adapter. `ops`
-        // names no binary path of its own, and a bare `"systemctl"` would be
-        // worse than the literal it replaced: a root process would resolve the
-        // program through `PATH`.
-        program: distro.service_manager(),
+        program: &service_manager,
         arguments: &[DAEMON_RELOAD],
+        // `daemon-reload` mutates the service manager's state, so it is a
+        // `Reload` and not a pure validation.
+        class: CallClass::Reload,
     };
-    let reload_arguments = [ENABLE, START_NOW, jail.unit_name()];
+    // `systemctl` honours the end-of-options marker (`getopt_long`), so the unit
+    // name after it can never be read as an option.
+    let reload_arguments = [ENABLE, START_NOW, END_OF_OPTIONS, jail.unit_name()];
     let reload = Reload {
-        program: distro.service_manager(),
+        program: &service_manager,
         arguments: &reload_arguments,
     };
 

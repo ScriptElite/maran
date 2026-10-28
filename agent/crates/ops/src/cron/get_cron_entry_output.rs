@@ -43,6 +43,8 @@ const MAXIMUM_OUTPUT: usize = 64 * 1024;
 /// - [`CronError::NotFound`] when the account has no managed entry with that
 ///   id.
 /// - [`CronError::CrontabRefused`] when the crontab could not be read.
+/// - [`CronError::Bound`] when `crontab` outlived its deadline and was killed with its
+///   process group. Nothing was changed.
 /// - [`CronError::EntryFileUnreadable`] when a file is there and cannot be read
 ///   as the entry's own.
 /// - [`CronError::Privilege`] when the account cannot be resolved.

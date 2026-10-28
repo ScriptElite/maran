@@ -1,11 +1,14 @@
 //! InstallPhpVersion: adding one of the supported versions to this host.
 
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::web::php_version::PhpVersion;
 use maran_distro::DistroAdapter;
 
 use crate::php::list_php_versions::is_installed;
 use crate::php::supported_versions::ensure_supported;
 use crate::php::{PhpHost, PhpOpError};
+use crate::safe_write::SafeWriteError;
+use maran_agent_core::end_of_options::END_OF_OPTIONS;
 
 /// The service-manager subcommand that runs a unit and waits for it to end.
 ///
@@ -99,6 +102,10 @@ fn describe_failure(unit: &str, start_stderr: &str) -> String {
 /// when the package installed but its service could not be enabled — reported
 /// separately because the two need different things from an operator: a
 /// repository or the unit's journal to look at, or a service unit to fix.
+/// Returns [`PhpOpError::Bound`] when the service manager outlived its deadline
+/// at either step and was killed, which is neither of those: the install unit
+/// runs in the service manager and may still finish, so the caller reads the
+/// host again before it believes the version is absent.
 pub fn install_php_version<P>(
     host: &dyn PhpHost,
     distro: &dyn DistroAdapter,
@@ -132,10 +139,27 @@ where
     let unit = install_unit_name(&package);
     progress(30, "download");
 
+    // `PackageInstall`, the one class that allows for a package manager: `systemctl start` of
+    // a `Type=oneshot` unit BLOCKS until the install ends, and its deadline sits above the
+    // unit's own `TimeoutStartSec`. A kill at the agent's deadline cancels nothing in the
+    // service manager, it only stops the agent waiting, so a bound here is reported as
+    // `Bound` and NOT as `PackageManager`: the install may still finish and the version may
+    // still appear, which is exactly what `PackageManager` would deny.
+    //
+    // `--` before the unit: `systemctl` reads its options with `getopt_long`, which ends
+    // option parsing at `--`.
+    let service_manager = distro.service_manager();
     let outcome = host
-        .run(distro.service_manager(), &[START_SUBCOMMAND, &unit])
-        .map_err(|error| PhpOpError::PackageManager {
-            stderr: describe_failure(&unit, &error.to_string()),
+        .run(
+            &service_manager,
+            &[START_SUBCOMMAND, END_OF_OPTIONS, &unit],
+            CallClass::PackageInstall,
+        )
+        .map_err(|error| match error {
+            SafeWriteError::Bound(bound) => PhpOpError::Bound(bound),
+            other => PhpOpError::PackageManager {
+                stderr: describe_failure(&unit, &other.to_string()),
+            },
         })?;
     if outcome.status != 0 {
         return Err(PhpOpError::PackageManager {
@@ -160,11 +184,15 @@ where
     let service = distro.php_fpm_service(version.as_str());
     let outcome = host
         .run(
-            distro.service_manager(),
-            &[ENABLE_SUBCOMMAND, START_NOW, &service],
+            &service_manager,
+            &[ENABLE_SUBCOMMAND, START_NOW, END_OF_OPTIONS, &service],
+            CallClass::Reload,
         )
-        .map_err(|error| PhpOpError::ServiceEnable {
-            stderr: error.to_string(),
+        .map_err(|error| match error {
+            SafeWriteError::Bound(bound) => PhpOpError::Bound(bound),
+            other => PhpOpError::ServiceEnable {
+                stderr: other.to_string(),
+            },
         })?;
     if outcome.status != 0 {
         return Err(PhpOpError::ServiceEnable {

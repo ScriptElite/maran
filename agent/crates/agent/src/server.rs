@@ -344,10 +344,23 @@ pub async fn serve(socket_path: &Path, policy: PeerPolicy) -> Result<(), Startup
     // The consequence is the one an operator needs and no line here used to
     // state: this process does not exit when the budget expires. `main` returns
     // and the runtime is dropped, and dropping a tokio runtime joins every
-    // blocking thread with NO timeout (tokio 1.53 `runtime::blocking::pool`),
-    // so the exit waits for whatever `useradd`, `rename` or database load was
-    // already running. The real bound on a stop is therefore the unit's
-    // `TimeoutStopSec=45` and the `SIGKILL` behind it, not this budget.
+    // blocking thread with NO timeout of its own (tokio 1.53
+    // `runtime::blocking::pool`), so the exit waits for whatever `useradd`,
+    // `rename` or database load was already running. Every program the agent
+    // starts now has a deadline (`CallClass`), so that wait is finite — but the
+    // longest class is hours (only `Bulk`; a package install is about 35 minutes), so it is not
+    // short. The real bound on a stop is therefore the unit's
+    // `TimeoutStopSec=45` and the `SIGKILL` behind it, not this budget and not
+    // a child's deadline.
+    //
+    // No tonic `timeout` or `concurrency_limit_per_connection` is set, on
+    // purpose. A server timeout drops the handler future and frees nothing (the
+    // blocking work and any lock it holds keep running), and it would report a
+    // failure for a write that then succeeds. A concurrency limit is per
+    // connection, the panel uses one HTTP/2 connection, so it would be a
+    // panel-wide limit that long-lived streams such as `sites.TailSiteLog`
+    // would eat slot by slot. A child that runs too long is bounded where the
+    // work is, by its call class, and surfaces as the in-band `Bound` error.
     tokio::select! {
         result = serving => result?,
         () = drain_deadline(deadline) => tracing::warn!(

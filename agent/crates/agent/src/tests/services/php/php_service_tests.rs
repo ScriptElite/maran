@@ -14,8 +14,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use maran_agent_core::command_outcome::CommandOutcome;
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::system::name::AccountName;
-use maran_distro::{DistroAdapter, DistroFamily, adapter_for};
+use maran_distro::{AdapterBinary, DistroAdapter, DistroFamily, adapter_for};
 use maran_ops::php::{PhpHost, PhpOpError};
 use maran_ops::safe_write::model::{Reload, Validator};
 use maran_ops::safe_write::{ConfigHost, SafeWriteError};
@@ -69,8 +70,13 @@ impl InstallHost {
 
 impl ConfigHost for InstallHost {
     /// Records the argv, and answers as the service manager would.
-    fn run(&self, program: &str, arguments: &[&str]) -> Result<CommandOutcome, SafeWriteError> {
-        let mut command = vec![program.to_owned()];
+    fn run(
+        &self,
+        program: &AdapterBinary,
+        arguments: &[&str],
+        _class: CallClass,
+    ) -> Result<CommandOutcome, SafeWriteError> {
+        let mut command = vec![program.to_string()];
         command.extend(arguments.iter().map(|argument| (*argument).to_owned()));
         self.calls.lock().unwrap().push(command);
 

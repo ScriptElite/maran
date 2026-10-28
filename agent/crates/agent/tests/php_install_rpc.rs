@@ -31,8 +31,10 @@ use maran_agent::proto::php_service_server::PhpService;
 use maran_agent::proto::{ErrorCode, InstallPhpVersionRequest, InstallPhpVersionResponse};
 use maran_agent::services::php::php_service::PhpServiceImpl;
 use maran_agent_core::command_outcome::CommandOutcome;
+use maran_agent_core::utils::bound_exceeded::BoundExceeded;
+use maran_agent_core::utils::call_class::CallClass;
 use maran_agent_core::validation::system::name::AccountName;
-use maran_distro::{DistroAdapter, DistroFamily, adapter_for};
+use maran_distro::{AdapterBinary, DistroAdapter, DistroFamily, adapter_for};
 use maran_ops::php::{PhpHost, PhpOpError};
 use maran_ops::safe_write::model::{Reload, Validator};
 use maran_ops::safe_write::{ConfigHost, SafeWriteError};
@@ -61,6 +63,9 @@ struct State {
     /// Whether a successful `start` leaves the version's pool directory behind,
     /// as the install unit's package manager does.
     start_installs: Mutex<Option<String>>,
+    /// Whether `start` outlives its deadline: the host then answers the bound
+    /// the bounded spawn core produces, and no outcome at all.
+    start_times_out: Mutex<bool>,
 }
 
 /// A [`PhpHost`] that spawns nothing: it records the argv and answers.
@@ -80,6 +85,7 @@ impl FakeHost {
             start_status: Mutex::new(0),
             start_stderr: Mutex::new(String::new()),
             start_installs: Mutex::new(None),
+            start_times_out: Mutex::new(false),
         });
         (
             Self {
@@ -100,6 +106,11 @@ impl State {
     fn fail_start(&self, status: i32, stderr: &str) {
         *self.start_status.lock().unwrap() = status;
         *self.start_stderr.lock().unwrap() = stderr.to_owned();
+    }
+
+    /// Makes `start` outlive its deadline, as a blocked `systemctl` does.
+    fn time_out_start(&self) {
+        *self.start_times_out.lock().unwrap() = true;
     }
 
     /// Makes `version` already installed.
@@ -125,8 +136,13 @@ impl State {
 }
 
 impl ConfigHost for FakeHost {
-    fn run(&self, program: &str, arguments: &[&str]) -> Result<CommandOutcome, SafeWriteError> {
-        let mut command = vec![program.to_owned()];
+    fn run(
+        &self,
+        program: &AdapterBinary,
+        arguments: &[&str],
+        _class: CallClass,
+    ) -> Result<CommandOutcome, SafeWriteError> {
+        let mut command = vec![program.to_string()];
         command.extend(arguments.iter().map(|argument| (*argument).to_owned()));
         self.state.commands.lock().unwrap().push(command);
 
@@ -136,6 +152,12 @@ impl ConfigHost for FakeHost {
                 stdout: String::new(),
                 stderr: String::new(),
             });
+        }
+        if *self.state.start_times_out.lock().unwrap() {
+            return Err(SafeWriteError::Bound(BoundExceeded::TimedOut {
+                program: program.to_string(),
+                deadline: CallClass::PackageInstall.deadline(),
+            }));
         }
         let status = *self.state.start_status.lock().unwrap();
         let stderr = self.state.start_stderr.lock().unwrap().clone();
@@ -282,11 +304,13 @@ async fn an_install_starts_the_adapters_unit_and_never_runs_the_package_manager(
         assert_eq!(
             state.commands()[0],
             vec![
-                distro.service_manager().to_owned(),
+                distro.service_manager().to_string(),
                 "start".to_owned(),
+                "--".to_owned(),
                 unit.to_owned()
             ],
-            "{family:?}: the first thing the agent spawns is the install unit's start"
+            "{family:?}: the first thing the agent spawns is the install unit's start, with the \
+             unit after the end of options"
         );
         assert!(
             state.commands_to(distro.package_manager()).is_empty(),
@@ -307,6 +331,49 @@ async fn a_version_already_installed_completes_at_one_hundred_without_starting_a
     assert!(
         state.commands().is_empty(),
         "a retry of an installed version must cost nothing: no unit start, no enable"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_install_unit_stopped_at_its_deadline_is_one_system_failure_with_no_tool_output() {
+    let (service, state) = service(DistroFamily::Debian);
+    state.time_out_start();
+
+    let messages = install(&service, "8.3").await;
+
+    match only_terminal(&messages) {
+        Outcome::Error(error) => {
+            assert_eq!(
+                error.code,
+                ErrorCode::SystemFailure as i32,
+                "a program stopped at its deadline is a fault of the host: {}",
+                error.message
+            );
+            assert!(
+                error.tool_output.is_empty(),
+                "what a stopped program printed is neither complete nor safe to forward, got {:?}",
+                error.tool_output
+            );
+            assert!(
+                error
+                    .message
+                    .contains(adapter_for(DistroFamily::Debian).service_manager().as_str()),
+                "the operator's message must name the program that was stopped, got {:?}",
+                error.message
+            );
+        }
+        other => panic!("expected the error terminal message, got {other:?}"),
+    }
+    assert!(
+        !stages(&messages).iter().any(|(percent, _)| *percent >= 80),
+        "no stage past the unit may be reported for a unit that was stopped"
+    );
+    assert!(
+        state
+            .commands()
+            .iter()
+            .all(|command| command.get(1).map(String::as_str) != Some("enable")),
+        "a stopped install must not go on to enable a service"
     );
 }
 
