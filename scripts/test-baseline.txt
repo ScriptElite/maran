@@ -1,6 +1,10 @@
 # Committed per-target test baseline. Recorded by 'maran test --accept'; commit the diff.
 # stack<TAB>target<TAB>passed<TAB>failed<TAB>ignored
 #
+# RE-MEASURED 2026-10-28 (issue #89, administrator-only authorization fallback, rebased on dev b0444fe):
+# backend projects measured one by one with -m:1, 17 projects, 0 failed. Rows raised: ArchitectureTests 80->91, Host.Tests 346->355, Identity.Tests 275->282, Accounts.Tests 279->428, Backups.Tests 198->204, Cron.Tests 182->187, Databases.Tests 101->106, Firewall.Tests 249->255, Ftp.Tests 128->133, Licensing.Tests 47->51, Monitoring.Tests 66->70, Notifications.Tests 48->52, Sftp.Tests 80->84, Sites.Tests 219->222, Ssl.Tests 205->209, Tasks.Tests 54->58.
+# Accounts includes the reserved-name tests of #83, measured here for the first time. Sdk 212 unchanged.
+# Host.IntegrationTests ran per class for the measurement (12 classes, 100/0); its row is left to CI.
 # RE-MEASURED 2026-10-28 (issue #96, reserved and panel host names refused, on dev 7b9f603): rust 30 targets
 # 2248 passed / 0 failed / 141 ignored (maran_agent 351->372, handshake 8->9, maran_agent_core 404->424,
 # maran_ops 1347->1348). Backend projects measured one by one with -m:1: SharedKernel 187->230, Sdk 208->212,
@@ -295,23 +299,23 @@ rust	doc-tests maran_ops	0	0	0
 rust	doc-tests maran_templates	0	0	0
 backend	Maran.Agent.Client.Tests.dll	371	0	0
 backend	Maran.SharedKernel.Tests.dll	230	0	0
-backend	Maran.Modules.Identity.Tests.dll	275	0	0
-backend	Maran.Modules.Sftp.Tests.dll	80	0	0
-backend	Maran.Modules.Notifications.Tests.dll	48	0	0
-backend	Maran.Modules.Tasks.Tests.dll	54	0	0
-backend	Maran.Modules.Ftp.Tests.dll	128	0	0
-backend	Maran.Modules.Monitoring.Tests.dll	66	0	0
-backend	Maran.Modules.Backups.Tests.dll	198	0	0
-backend	Maran.Modules.Licensing.Tests.dll	47	0	0
-backend	Maran.Modules.Firewall.Tests.dll	249	0	0
-backend	Maran.Modules.Cron.Tests.dll	182	0	0
-backend	Maran.Modules.Accounts.Tests.dll	279	0	0
-backend	Maran.Modules.Databases.Tests.dll	101	0	0
-backend	Maran.Modules.Ssl.Tests.dll	205	0	0
+backend	Maran.Modules.Identity.Tests.dll	282	0	0
+backend	Maran.Modules.Sftp.Tests.dll	84	0	0
+backend	Maran.Modules.Notifications.Tests.dll	52	0	0
+backend	Maran.Modules.Tasks.Tests.dll	58	0	0
+backend	Maran.Modules.Ftp.Tests.dll	133	0	0
+backend	Maran.Modules.Monitoring.Tests.dll	70	0	0
+backend	Maran.Modules.Backups.Tests.dll	204	0	0
+backend	Maran.Modules.Licensing.Tests.dll	51	0	0
+backend	Maran.Modules.Firewall.Tests.dll	255	0	0
+backend	Maran.Modules.Cron.Tests.dll	187	0	0
+backend	Maran.Modules.Accounts.Tests.dll	428	0	0
+backend	Maran.Modules.Databases.Tests.dll	106	0	0
+backend	Maran.Modules.Ssl.Tests.dll	209	0	0
 backend	Maran.Sdk.Tests.dll	212	0	0
-backend	Maran.Modules.Sites.Tests.dll	219	0	0
-backend	Maran.ArchitectureTests.dll	80	0	0
-backend	Maran.Host.Tests.dll	346	0	0
+backend	Maran.Modules.Sites.Tests.dll	222	0	0
+backend	Maran.ArchitectureTests.dll	91	0	0
+backend	Maran.Host.Tests.dll	355	0	0
 backend	Maran.Host.IntegrationTests.dll	415	0	0
 spa	accounts/delete.spec.ts	6	0	0
 spa	accounts/detail.spec.ts	10	0	0
