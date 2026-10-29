@@ -358,6 +358,14 @@ public static class AuditActions
     public const string PasswordResetRefused = "PasswordResetRefused";
 
     /// <summary>
+    /// An administrator's access was recovered, or refused recovery, from the server's own console
+    /// (<c>maran admin-reset-password</c>). Recorded with the panel as actor and the claimed operator
+    /// name as an unverified hint; the subject is the administrator's user id, and neither the token
+    /// nor the link ever appears.
+    /// </summary>
+    public const string ConsoleRecovery = "ConsoleRecovery";
+
+    /// <summary>
     /// The panel's security policy was changed: password length, forced two-factor, or the account
     /// lockout. Every one of those weakens or strengthens every account at once, so the change needs
     /// a date and an author more than most.

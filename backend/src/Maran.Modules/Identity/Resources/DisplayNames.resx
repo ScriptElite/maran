@@ -267,4 +267,7 @@
   <data name="InvitationStateAccepted">
     <value>Invitation accepted</value>
   </data>
+  <data name="AuditActionConsoleRecovery">
+    <value>Administrator recovered from the server console</value>
+  </data>
 </root>

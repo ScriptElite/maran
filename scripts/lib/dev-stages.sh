@@ -170,7 +170,7 @@ dev_stage_database() {
   else
     docker compose -f "$compose" up -d --quiet-pull postgres >"$logs/database.log" 2>&1
     postgres_started_at="$(docker inspect -f '{{.State.StartedAt}}' maran-postgres 2>/dev/null || true)"
-    echo "     started maran-postgres (nothing was running) — this run will stop it again"
+    echo "     started maran-postgres on 127.0.0.1:${Database__Port:-5432} (nothing was running) — this run will stop it again"
   fi
   dev_ready_database
 

@@ -624,6 +624,10 @@ remove_sftp_group() {
 remove_binaries() {
   echo "Removing Maran binaries..."
   rm -rf /usr/local/maran
+  # The break-glass command and its diagnostics staging directory (the libraries went with
+  # /usr/local/maran above).
+  rm -f /usr/local/sbin/maran
+  rm -rf /var/lib/maran-cli-staging
 }
 
 # remove_config_and_state: /etc/maran holds panel.env (the encryption key), agent.env and

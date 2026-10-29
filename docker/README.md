@@ -41,7 +41,10 @@
   integration tests.
   - Database: `maran_dev`
   - User/Password: `maran_dev` / `maran_dev` (dev-only trivial credentials)
-  - Port: `localhost:5432`
+  - Port: `localhost:5432` by default. The host port is the `Database__Port` setting in the repo-root
+    `.env`; every dev script, the compose mapping, the handshake and the schema-drift helpers read it,
+    so changing that one line moves them all. When another project already holds 5432, set
+    `Database__Port=5433` and restart the database.
   - Includes a healthcheck for deterministic test startup.
 
 - **`polygon/images/ubuntu24/suite.Dockerfile`**: Ubuntu 24.04 test container for the Rust agent.
@@ -636,7 +639,7 @@ sshd, which is not a fixture two tests may hold at once.
 
 ## Integration Testing
 
-PostgreSQL should be running (see "Starting PostgreSQL" above). Tests can connect to `postgres://maran_dev:maran_dev@localhost:5432/maran_dev`.
+PostgreSQL should be running (see "Starting PostgreSQL" above). Tests can connect to `postgres://maran_dev:maran_dev@localhost:5432/maran_dev` (5432 is the default; use the `Database__Port` value from `.env` if you changed it).
 
 For distro-specific agent testing, build an image, then mount your agent binary and test command as shown above.
 

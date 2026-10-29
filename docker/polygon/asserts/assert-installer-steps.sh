@@ -111,6 +111,14 @@ readonly UNINSTALLER="${INSTALLER_ROOT}/uninstall.sh"
 # `vsftpd_packages_for_family`, so a package name that stops being right on a family stops that
 # family's image build rather than a customer's install.
 readonly FTPS_STEP="${INSTALLER_LIB}/89-ftps.sh"
+# Step 66, the break-glass `maran` command, and the sources it installs. The step is RUN (its own
+# step_cli, in a child) and the sources are READ: parts/cli-recovery.sh looks at what the step left
+# on the disk and at the wrapper's text. SOURCE paths are the installer package's layout, which the
+# Dockerfile reproduces under INSTALLER_ROOT; the INSTALLED paths are literals in the part, because
+# an assertion that reads its expectation out of the file it checks agrees with it by construction.
+readonly CLI_STEP="${INSTALLER_LIB}/66-cli.sh"
+readonly CLI_WRAPPER_SOURCE="${INSTALLER_ROOT}/cli/maran"
+readonly CLI_LIB_SOURCE_DIR="${INSTALLER_ROOT}/cli/lib"
 # The package-manager adapter step 89 installs through. `install_vsftpd_package` refuses by name
 # when `pkg_install` is undefined, so a missing COPY here is a named failure and not a skip.
 readonly DEPENDENCIES_STEP="${INSTALLER_LIB}/20-dependencies.sh"
@@ -220,6 +228,12 @@ require_installer_file "${INSTALLER_LIB}/85-mysql.sh" installer/lib/85-mysql.sh
 require_installer_file "${INSTALLER_LIB}/86-sftp.sh" installer/lib/86-sftp.sh
 require_installer_file "$UNINSTALLER" installer/uninstall.sh
 require_installer_file "$FTPS_STEP" installer/lib/89-ftps.sh
+require_installer_file "$CLI_STEP" installer/lib/66-cli.sh
+require_installer_file "$CLI_WRAPPER_SOURCE" installer/cli/maran
+for __cli_lib in common.sh status.sh reset.sh diagnostics.sh; do
+  require_installer_file "${CLI_LIB_SOURCE_DIR}/${__cli_lib}" "installer/cli/lib/${__cli_lib}"
+done
+unset __cli_lib
 require_installer_file "$DEPENDENCIES_STEP" installer/lib/20-dependencies.sh
 require_installer_file "$FTPS_UNIT_SOURCE" installer/systemd/maran-ftps.service
 require_installer_file "$FTPS_LOGROTATE_SOURCE" installer/logrotate/maran-ftps
@@ -469,7 +483,8 @@ for __part in \
   "${ASSERT_PARTS_DIR}/php-install-unit.sh" \
   "${ASSERT_PARTS_DIR}/uninstaller.sh" \
   "${ASSERT_PARTS_DIR}/ftps.sh" \
-  "${ASSERT_PARTS_DIR}/artifacts-and-packages.sh"; do
+  "${ASSERT_PARTS_DIR}/artifacts-and-packages.sh" \
+  "${ASSERT_PARTS_DIR}/cli-recovery.sh"; do
   [ -r "$__part" ] || fail "assert-installer-steps.sh: ${__part} is not in this image; the Dockerfile must COPY docker/polygon/asserts/parts/"
   # shellcheck source=/dev/null
   . "$__part"
@@ -591,6 +606,11 @@ main() {
   assert_the_postgresql_conf_resolver_finds_a_real_debian_layout
   assert_the_manifest_reader_reads_every_field_not_only_the_last
   assert_the_uninstaller_keeps_the_backup_root
+  # The break-glass command, after the backup-root assertion and last of the installer-text ones:
+  # both of these install into /usr/local, and the second RUNS the uninstaller's remove_binaries,
+  # which takes /usr/local/maran with it (the layout is put back inside the assertion).
+  assert_the_break_glass_command_installs_root_only_and_refuses_what_it_should
+  assert_the_uninstaller_removes_the_break_glass_command
   echo "Installer steps 40, 50, 60, 70, 80, 85, 86, 87 and 89, the panel port's single authority, and"
   echo "the on-disk boundary the two privilege-escalation fixes moved, verified inside the polygon."
 }

@@ -260,6 +260,258 @@ if [ -n "${failed_units//[[:space:]]/}" ]; then
   echo "$failed_units" | sed 's/^/      /'
 fi
 
+# ---------------------------------------------------------------------------------------------
+# The break-glass `maran` command (issue #130), against a real systemd and a real panel.
+#
+# The suite-level assertions (docker/polygon/asserts/parts/cli-recovery.sh) show the wrapper's
+# modes, its refusals and its fixed argv; none of them can show that a locked-out administrator
+# actually gets back in, because that needs the panel, PostgreSQL and the service account running.
+# These two stages are that proof, and they run only on an install that already passed every check
+# above: a recovery stage scored on a half-installed panel would report on the install.
+# ---------------------------------------------------------------------------------------------
+recovery_checks=0
+recovery_log="${log_dir}/recovery-${os}-${arch}-${mode}.log"
+: > "$recovery_log"
+
+# panel_post: the HTTP status of one JSON POST to the panel through nginx, or 000. Bodies carry
+# throwaway credentials made up by this harness; the status is all that is read back.
+panel_post() {
+  docker exec "$container" curl -sk -o /dev/null -w '%{http_code}' --max-time 20 \
+    -X POST -H 'Content-Type: application/json' --data "$2" "https://127.0.0.1:8443$1" 2>/dev/null \
+    | tr -d '\r' || true
+}
+
+# wait_for_panel: 0 once /health reports a reachable database, 1 after ~90 seconds.
+wait_for_panel() {
+  local answer
+  for _ in $(seq 1 45); do
+    answer="$(docker exec "$container" curl -sk --max-time 5 https://127.0.0.1:8443/health 2>/dev/null \
+      | tr -d '\r' || true)"
+    case "$answer" in *'"database":"reachable"'*) return 0 ;; esac
+    sleep 2
+  done
+  return 1
+}
+
+# restart_panel_api: a restart of maran-api, which empties the in-memory per-address login rate
+# limiter (5 attempts per 300 s). The ACCOUNT lockout lives in the database and survives it, and
+# that separation is the point: the limiter would otherwise answer 429 long before the account's
+# own failed-attempt counter reached its limit, and the stage would be scoring the limiter.
+restart_panel_api() {
+  docker exec "$container" systemctl restart maran-api >/dev/null 2>&1 || return 1
+  wait_for_panel
+}
+
+# recovery_expect: one scored check. $1 = what it asserts, $2 = observed, $3 = expected.
+recovery_expect() {
+  recovery_checks=$((recovery_checks + 1))
+  [ "$2" = "$3" ] || note "recovery: $1: got '$2', expected '$3'"
+}
+
+# stage_lockout_recovery: first-admin setup, a locked account, the recovery command, and a link
+# that works exactly once.
+stage_lockout_recovery() {
+  local admin_user="polygonadmin" admin_email="polygon.admin@example.test"
+  local old_password="Polygon-Old-Password-1" new_password="Polygon-New-Password-2"
+  local setup_token code batch attempt non_401=0 out status link token journal
+
+  setup_token="$(docker exec "$container" sed -n 's/^Setup__Token=//p' /etc/maran/panel.env 2>/dev/null | tr -d '\r' || true)"
+  # The vacuity guard: an empty token makes the setup refuse and every later line report on a
+  # panel that has no administrator, which would read as five unrelated failures.
+  if [ "${#setup_token}" -lt 8 ]; then
+    note "recovery: /etc/maran/panel.env carries no Setup__Token of at least 8 characters, so the first administrator cannot be created and nothing below was observed"
+    return 0
+  fi
+
+  code="$(panel_post /api/v1/setup "{\"token\":\"${setup_token}\",\"username\":\"${admin_user}\",\"email\":\"${admin_email}\",\"password\":\"${old_password}\"}")"
+  recovery_expect "completing first-admin setup" "$code" "200"
+  [ "$code" = "200" ] || return 0
+
+  # The positive control for everything about locking: this exact credential is ACCEPTED now, so a
+  # refusal of it later is attributable to the lock and not to a wrong password.
+  code="$(panel_post /api/v1/auth/login "{\"username\":\"${admin_user}\",\"password\":\"${old_password}\"}")"
+  recovery_expect "signing in with the new administrator's password before any failure" "$code" "200"
+  [ "$code" = "200" ] || return 0
+
+  # Twelve wrong passwords, in batches of four with a restart between them: under the limiter's 5
+  # per address and over the account's default limit of 10 failed attempts. Every attempt must be a
+  # plain 401; a 429 means the limiter, not the account, answered, and the lock was never reached.
+  for batch in 1 2 3; do
+    restart_panel_api || { note "recovery: the panel did not come back after a restart (batch ${batch})"; return 0; }
+    for attempt in 1 2 3 4; do
+      code="$(panel_post /api/v1/auth/login "{\"username\":\"${admin_user}\",\"password\":\"Polygon-Wrong-Password-${batch}${attempt}\"}")"
+      [ "$code" = "401" ] || non_401=$((non_401 + 1))
+    done
+  done
+  recovery_expect "twelve wrong passwords all answered 401 (none rate-limited)" "$non_401" "0"
+
+  restart_panel_api || { note "recovery: the panel did not come back after the last restart"; return 0; }
+  code="$(panel_post /api/v1/auth/login "{\"username\":\"${admin_user}\",\"password\":\"${old_password}\"}")"
+  recovery_expect "the CORRECT password is refused after exceeding the failed-login limit (locked)" "$code" "401"
+
+  # The recovery command. First its refusal to print a credential into a non-terminal: docker exec
+  # without -t is exactly that, so this is the unflagged invocation and it must print no link.
+  status=0
+  out="$(docker exec "$container" /usr/local/sbin/maran admin-reset-password "$admin_user" 2>>"$recovery_log" | tr -d '\r')" || status=$?
+  recovery_expect "admin-reset-password without --allow-non-terminal on a non-terminal exits non-zero" "$([ "$status" -ne 0 ] && echo refused || echo accepted)" "refused"
+  case "$out" in
+    *'reset-password?token='*) note "recovery: a reset link was printed to a non-terminal without --allow-non-terminal" ;;
+  esac
+
+  status=0
+  out="$(docker exec "$container" /usr/local/sbin/maran admin-reset-password "$admin_user" --allow-non-terminal 2>>"$recovery_log" | tr -d '\r')" || status=$?
+  recovery_expect "admin-reset-password --allow-non-terminal exits 0" "$status" "0"
+  link="$(printf '%s\n' "$out" | grep -E 'reset-password\?token=' || true)"
+  recovery_expect "exactly one reset link on standard output" "$(printf '%s\n' "$link" | grep -c . || true)" "1"
+  token="${link##*token=}"
+  # Percent-decoded: the CLI escapes the token as a URL component and the endpoint wants it raw.
+  token="$(printf '%b' "$(printf '%s' "$token" | sed 's/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g')")"
+  if [ "${#token}" -lt 20 ]; then
+    note "recovery: no usable token could be read from the printed link, so the redemption below was not observed"
+    return 0
+  fi
+
+  code="$(panel_post /api/v1/auth/reset-password "{\"token\":\"${token}\",\"newPassword\":\"${new_password}\"}")"
+  recovery_expect "redeeming the link with a new password" "$code" "200"
+
+  code="$(panel_post /api/v1/auth/login "{\"username\":\"${admin_user}\",\"password\":\"${new_password}\"}")"
+  recovery_expect "signing in with the new password (the lock is cleared)" "$code" "200"
+  code="$(panel_post /api/v1/auth/login "{\"username\":\"${admin_user}\",\"password\":\"${old_password}\"}")"
+  recovery_expect "the old password no longer works" "$code" "401"
+
+  # Single use. The same request that returned 200 above, replayed, must now be refused; the first
+  # redemption is this check's inverse control (the token was acceptable until it was spent).
+  code="$(panel_post /api/v1/auth/reset-password "{\"token\":\"${token}\",\"newPassword\":\"Polygon-Replay-Password-3\"}")"
+  recovery_expect "replaying the spent link" "$code" "400"
+  code="$(panel_post /api/v1/auth/login "{\"username\":\"${admin_user}\",\"password\":\"Polygon-Replay-Password-3\"}")"
+  recovery_expect "the replayed link did not change the password" "$code" "401"
+
+  # The authpriv line exists (positive control) and carries no token (the point).
+  docker exec "$container" journalctl --sync >/dev/null 2>&1 || true
+  journal="$(docker exec "$container" journalctl -t maran-cli --no-pager -o cat 2>/dev/null | tr -d '\r' || true)"
+  case "$journal" in
+    *'verb=admin-reset-password outcome=issued'*) recovery_checks=$((recovery_checks + 1)) ;;
+    *) note "recovery: the journal has no 'verb=admin-reset-password outcome=issued' line from maran-cli, so the no-token check below saw nothing: ${journal}" ;;
+  esac
+  case "$journal" in
+    *"$token"*) note "recovery: the reset token appears in the maran-cli journal lines" ;;
+    *) recovery_checks=$((recovery_checks + 1)) ;;
+  esac
+  echo "    lockout-recovery: locked after 12 failures, link minted by 'maran admin-reset-password', redeemed once, sign-in restored, replay refused (${recovery_checks} checks so far)"
+  echo "    UNOBSERVED HERE: the root caller's identity is whatever 'docker exec' reports (root, no SUDO_USER), so the claimed-operator name in the audit row is not exercised; and the limiter was emptied by restarting maran-api between batches, so what is proved is the ACCOUNT lock, not the per-address limit."
+}
+
+# stage_diagnostics: a bundle collected from the running host, with canaries planted where the
+# redactor must find them, extracted and searched.
+stage_diagnostics() {
+  local setup_token b64 pem_body pem canary_name="Polygon__CanarySecret" canary_value
+  local env_backup="/root/panel.env.polygon-orig" canary_log="/var/log/maran/polygon-canary.log"
+  local out status bundle extract control_dir hits kept needle
+
+  setup_token="$(docker exec "$container" sed -n 's/^Setup__Token=//p' /etc/maran/panel.env 2>/dev/null | tr -d '\r' || true)"
+  b64="$(head -c 36 /dev/urandom | base64 -w0)"
+  pem_body="$(head -c 48 /dev/urandom | base64 -w0)"
+  pem="$(printf -- '-----BEGIN PRIVATE KEY-----\n%s\n-----END PRIVATE KEY-----' "$pem_body")"
+  canary_value="$(head -c 18 /dev/urandom | base64 | tr '+/=' 'xyz')"
+  if [ "${#setup_token}" -lt 8 ]; then
+    note "diagnostics: panel.env carries no known secret value (Setup__Token) to plant, so redaction of a KNOWN value was not observed"
+    return 0
+  fi
+
+  # 1. The canaries: a known configuration value, a PEM block and a base64 secret in a top-level
+  # product log the bundle collects. The sentinel word proves the file was collected (not blank).
+  printf 'polygon-canary-line: handler started\nunexpected value %s in handler\n%s\nrequest failed with payload %s\n' \
+    "$setup_token" "$pem" "$b64" | docker exec -i "$container" tee "$canary_log" >/dev/null
+  docker exec "$container" cp -p /etc/maran/panel.env "$env_backup"
+
+  # The positive control, on the SOURCE: before redaction every canary is in the log the bundle
+  # reads. Without this, "zero hits in the bundle" could mean the canaries never existed.
+  for needle in "$setup_token" "$pem_body" "$b64" '-----BEGIN PRIVATE KEY-----'; do
+    docker exec "$container" grep -qF -- "$needle" "$canary_log" \
+      || note "diagnostics: a canary is not in ${canary_log} before collection, so its absence from the bundle proves nothing"
+  done
+  recovery_checks=$((recovery_checks + 1))
+
+  # 2. Collect, extract, search.
+  status=0
+  out="$(docker exec "$container" /usr/local/sbin/maran collect-diagnostics --out /root 2>>"$recovery_log" | tr -d '\r')" || status=$?
+  recovery_expect "collect-diagnostics with planted canaries exits 0" "$status" "0"
+  bundle="$(printf '%s\n' "$out" | sed -n 's/^Diagnostics bundle: //p')"
+  if [ "$status" -eq 0 ] && [ -n "$bundle" ]; then
+    recovery_expect "the bundle is 0600" "$(docker exec "$container" stat -c '%a %U' "$bundle" | tr -d '\r')" "600 root"
+    extract="/root/polygon-diag-extract"
+    control_dir="/root/polygon-diag-control"
+    docker exec "$container" rm -rf "$extract" "$control_dir"
+    docker exec "$container" mkdir -p "$extract" "$control_dir"
+    docker exec "$container" tar -xzf "$bundle" -C "$extract"
+
+    # Vacuity guards on the collection axis: the planted log is in the bundle, with its sentinel,
+    # beside the other allow-listed texts, and the env NAMES file names the secret but not its value.
+    recovery_expect "the bundle contains the planted log with its sentinel" \
+      "$(docker exec "$container" grep -c 'polygon-canary-line' "${extract}/log-polygon-canary.log" 2>/dev/null | tr -d '\r' || true)" "1"
+    recovery_expect "the bundle holds at least 8 collected texts" \
+      "$([ "$(docker exec "$container" find "$extract" -type f | wc -l)" -ge 8 ] && echo yes || echo no)" "yes"
+    recovery_expect "the env names file lists Setup__Token" \
+      "$(docker exec "$container" grep -c '^Setup__Token$' "${extract}/panel-env-names.txt" 2>/dev/null | tr -d '\r' || true)" "1"
+
+    # The search, with its own positive control: the same grep over a directory holding the raw
+    # canaries must find all four, or its zero over the bundle is the probe being blind.
+    printf '%s\n%s\n%s\n' "$setup_token" "$pem" "$b64" | docker exec -i "$container" tee "${control_dir}/raw.txt" >/dev/null
+    for needle in "$setup_token" "$pem_body" "$b64" '-----BEGIN'; do
+      docker exec "$container" grep -rqF -- "$needle" "$control_dir" \
+        || note "diagnostics: the extraction search does not find a planted canary in its own control directory, so its zero over the bundle is meaningless"
+    done
+    recovery_checks=$((recovery_checks + 1))
+    hits=0
+    for needle in "$setup_token" "$pem_body" "$b64" '-----BEGIN'; do
+      docker exec "$container" grep -rqF -- "$needle" "$extract" && hits=$((hits + 1))
+    done
+    recovery_expect "canaries found in the extracted bundle (known value, PEM body, base64 secret, PEM marker)" "$hits" "0"
+    docker exec "$container" rm -rf "$extract" "$control_dir" "$bundle"
+  else
+    note "diagnostics: no bundle path in the command's output: ${out}"
+  fi
+
+  # 3. Fail closed. A value in panel.env that the redactor has no way to know, planted bare in the
+  # log: the extract-and-scan barrier must see it by NAME-matched value and refuse, leaving no
+  # archive. This is the scanner's inverse control: the first run above shows it ACCEPTS a clean
+  # bundle, this one shows it REFUSES a dirty one.
+  printf '\n%s=%s\n' "$canary_name" "$canary_value" | docker exec -i "$container" tee -a /etc/maran/panel.env >/dev/null
+  printf 'unknown secret in a message: %s\n' "$canary_value" | docker exec -i "$container" tee -a "$canary_log" >/dev/null
+  status=0
+  out="$(docker exec "$container" /usr/local/sbin/maran collect-diagnostics --out /root 2>&1 | tr -d '\r')" || status=$?
+  recovery_expect "a bundle that still holds an unredacted configuration value is refused (non-zero exit)" "$([ "$status" -ne 0 ] && echo refused || echo accepted)" "refused"
+  case "$out" in
+    *"${canary_name} survived redaction"*) recovery_checks=$((recovery_checks + 1)) ;;
+    *) note "diagnostics: the refusal did not name ${canary_name}: ${out}" ;;
+  esac
+  case "$out" in
+    *"$canary_value"*) note "diagnostics: the refusal message printed the secret's VALUE" ;;
+    *) recovery_checks=$((recovery_checks + 1)) ;;
+  esac
+  kept="$(docker exec "$container" bash -c 'ls /root/maran-diagnostics-*.tar.gz 2>/dev/null | wc -l' | tr -d '\r' || true)"
+  recovery_expect "no archive is left behind after a refused bundle" "$kept" "0"
+
+  # 4. Put the host back, and prove it.
+  docker exec "$container" bash -c "cat '$env_backup' > /etc/maran/panel.env && rm -f '$env_backup' '$canary_log'"
+  recovery_expect "panel.env no longer holds the planted canary setting" \
+    "$(docker exec "$container" grep -c "^${canary_name}=" /etc/maran/panel.env 2>/dev/null | tr -d '\r' || true)" "0"
+  docker exec "$container" bash -c 'rm -rf /var/lib/maran-cli-staging/*' || true
+  echo "    diagnostics: canaries planted (known value, PEM block, base64 secret), bundle extracted and searched, fail-closed refusal shown (${recovery_checks} checks so far)"
+  echo "    UNOBSERVED HERE: secrets with no known literal and no matching pattern. Redaction is literal- and pattern-based; a free-text password in a log line, or a token in a format nobody listed, passes it. The second-look scan compares only the values of settings whose NAMES say they are secrets."
+  echo "    UNOBSERVED HERE: whether the known value was removed by the live-configuration LITERAL stage or by a pattern (a long base64-shaped token matches both); the zero hits do not attribute the removal."
+  echo "    UNOBSERVED HERE: customer-identifying data (domain names, IP addresses) is not removed by design, and a real operator's journal is far larger than this fresh install's."
+}
+
+if [ "$failures" -eq 0 ]; then
+  stage_lockout_recovery
+  stage_diagnostics
+  [ "$recovery_checks" -ge 20 ] \
+    || note "the lockout-recovery and diagnostics stages made only ${recovery_checks} checks, fewer than the 20 they make when nothing stops them early; a stage that returned early observed little (see ${recovery_log#"$root"/})"
+else
+  echo "    lockout-recovery and diagnostics stages NOT RUN: the install itself failed above, and a recovery stage scored on a half-installed panel would be reporting on the install."
+fi
+
 if [ "$keep" = "yes" ]; then
   echo "    container kept: docker exec -it ${container} bash"
 else

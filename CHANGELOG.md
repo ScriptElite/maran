@@ -5,6 +5,22 @@ than a strict category list: what changed and why it matters to somebody running
 
 ## Unreleased
 
+**An administrator locked out of the panel now has a supported way back in.** When the only administrator
+lost a password or an authenticator and no mail was configured, the only options were editing the
+database by hand, which leaves no audit row, or reinstalling. The installer now places a root-only
+`maran` command at `/usr/local/sbin/maran` (it adds no daemon, port or network call):
+
+- **`maran admin-reset-password <email|username>`** prints a one-hour, single-use password-reset link for an
+  active administrator, spends any older link, clears the lockout, signs the account out everywhere and
+  writes an audit row and an `authpriv` journal line. The link goes to the terminal only, never to a log;
+  `--clear-two-factor` also removes the authenticator, and is never implied.
+- **`maran status`** reports service health and the panel's own view of itself even when the database is down.
+- **`maran collect-diagnostics`** writes a redacted 0600 support bundle from a fixed allow-list and deletes it
+  if a second scan still finds a secret. Customer files, site logs, keys and backups are never read.
+
+Operator-facing reference: the Recovery page of the documentation. Security review of this surface is
+recorded as outstanding in `docs/superpowers/notes/2026-10-29-breakglass-cli-threat-note.md`.
+
 **A hung program could freeze the root agent and block every other customer's writes.** Every program
 the agent runs as root was started without a deadline, without an output limit and in the agent's own
 process group. Measured with a validator that never exits, held under the host-wide configuration lock:
