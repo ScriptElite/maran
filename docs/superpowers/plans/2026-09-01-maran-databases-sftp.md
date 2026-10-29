@@ -183,7 +183,7 @@ Expected: FAIL — `DatabaseName` does not exist.
 
 ```rust
 /// The separator between an account's name and the name it chose. Underscore because MySQL
-/// accepts it unquoted and because cPanel has used it for two decades, so operators read
+/// accepts it unquoted and because hosting panels have long used it, so operators read
 /// `alice_shop` without being told what it means.
 const SEPARATOR: char = '_';
 
