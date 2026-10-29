@@ -57,6 +57,10 @@ public sealed class AuditActionDisplayNameTests
                 "The actor name of the module's unattended entries, not an action.",
             ["Maran.Modules.Identity.Services.IdentityAuditJournal.ModuleName"] =
                 "The actor name of the module's unattended entries, not an action.",
+            ["Maran.Modules.Identity.Services.IdentityAuditJournal.ConsoleOrigin"] =
+                "The address-column text of an entry written from the server console, not an action.",
+            ["Maran.Modules.Identity.Services.IdentityAuditJournal.OperatorClaimPrefix"] =
+                "The user-agent-column prefix marking an unverified operator name, not an action.",
             ["Maran.Modules.Ssl.Services.CertificateAuditJournal.ModuleName"] =
                 "The actor name of the module's unattended entries, not an action.",
             ["Maran.Modules.Backups.Services.BackupAuditJournal.ModuleName"] =

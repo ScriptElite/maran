@@ -81,4 +81,13 @@
   <data name="InvitationLoginNotPending">
     <value>There is nothing to invite this account's owner to: the login already has a password.</value>
   </data>
+  <data name="AdminRecoveryUserNotFound">
+    <value>No user with that e-mail address or username exists.</value>
+  </data>
+  <data name="AdminRecoveryNotAdministrator">
+    <value>That user is not an administrator. Only administrators can be recovered from the console.</value>
+  </data>
+  <data name="AdminRecoveryLoginNotActive">
+    <value>That administrator's login is not active (it is suspended or still awaiting its first password), so it cannot be recovered from the console.</value>
+  </data>
 </root>

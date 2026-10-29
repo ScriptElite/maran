@@ -18,13 +18,42 @@ public static class ObservabilityExtensions
     /// systemd captures stdout into the journal.
     /// </summary>
     /// <param name="builder">The host builder to attach logging to.</param>
+    /// <param name="commandLineMode">
+    /// True for a <c>--cli</c> or <c>--migrate</c> run: the console sink then writes to standard error
+    /// and only at Warning or above, so standard output carries nothing but the verb's own answer
+    /// (a reset link must not share a stream with log lines, and a pipeline reading a verb's output
+    /// must not parse Serilog).
+    /// </param>
     /// <returns>The same builder, for chaining.</returns>
-    public static IHostBuilder AddPanelObservability(this IHostBuilder builder)
+    public static IHostBuilder AddPanelObservability(this IHostBuilder builder, bool commandLineMode = false)
     {
         return builder.UseSerilog((context, configuration) =>
         {
+            if (commandLineMode)
+            {
+                ConfigureCommandLineLogger(context, configuration);
+                return;
+            }
+
             ConfigureLogger(context, configuration);
         });
+    }
+
+    /// <summary>Builds the logger configuration for a command-line run: standard error, Warning and above.</summary>
+    /// <param name="context">The host context, source of configuration.</param>
+    /// <param name="configuration">The logger configuration to populate.</param>
+    private static void ConfigureCommandLineLogger(HostBuilderContext context, LoggerConfiguration configuration)
+    {
+        configuration
+            .ReadFrom.Configuration(context.Configuration)
+            .MinimumLevel.Warning()
+            .Enrich.FromLogContext()
+            // A configuration file may lower a namespace's level (the Development file does), so the
+            // floor is enforced again as a filter rather than trusted to the minimum alone.
+            .Filter.ByIncludingOnly(logEvent => { return logEvent.Level >= LogEventLevel.Warning; })
+            .WriteTo.Console(
+                standardErrorFromLevel: LogEventLevel.Verbose,
+                formatProvider: CultureInfo.InvariantCulture);
     }
 
     /// <summary>Builds the logger configuration for a host context.</summary>

@@ -268,4 +268,7 @@
   <data name="InvitationStateAccepted">
     <value>Приглашение принято</value>
   </data>
+  <data name="AuditActionConsoleRecovery">
+    <value>Доступ администратора восстановлен с консоли сервера</value>
+  </data>
 </root>

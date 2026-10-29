@@ -268,4 +268,7 @@
   <data name="InvitationStateAccepted">
     <value>Հրավերն ընդունվել է</value>
   </data>
+  <data name="AuditActionConsoleRecovery">
+    <value>Ադմինիստրատորի մուտքը վերականգնվեց սերվերի կոնսոլից</value>
+  </data>
 </root>

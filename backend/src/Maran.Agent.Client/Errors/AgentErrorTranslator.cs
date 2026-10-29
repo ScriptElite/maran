@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Maran.Agent.Client.Resources;
 using Maran.Agent.V1;
 using Maran.SharedKernel.Results;
@@ -26,14 +25,8 @@ namespace Maran.Agent.Client.Errors;
 /// base64 fragments a parser quotes alike — so a private key the agent echoed back cannot land in
 /// the panel's log.
 /// </remarks>
-internal static partial class AgentErrorTranslator
+internal static class AgentErrorTranslator
 {
-    /// <summary>What replaces a PEM block in text on its way to the log.</summary>
-    private const string RedactedPem = "[pem redacted]";
-
-    /// <summary>What replaces a bare run of key-shaped characters in text on its way to the log.</summary>
-    private const string RedactedSecret = "[redacted]";
-
     /// <summary>
     /// Pre-compiled log delegate for a failure the agent reported. Source-generated because an agent
     /// that is refusing fails every call at once.
@@ -200,47 +193,6 @@ internal static partial class AgentErrorTranslator
     /// </remarks>
     private static string Redact(string text, SensitiveString? sentSecret)
     {
-        var withoutSentSecret = RemoveSentSecret(text, sentSecret);
-        var withoutPemBlocks = PemBlock().Replace(withoutSentSecret, RedactedPem);
-
-        return Base64Run().Replace(withoutPemBlocks, RedactedSecret);
+        return SecretTextRedactor.RedactKeyMaterial(text, sentSecret);
     }
-
-    /// <summary>Replaces every occurrence of the secret this call sent, when there was one.</summary>
-    /// <param name="text">The agent's text.</param>
-    /// <param name="sentSecret">The secret this call carried to the agent, or null.</param>
-    /// <returns>The text with the secret masked, or the text unchanged when there is nothing to look for.</returns>
-    /// <remarks>
-    /// The length floor is <see cref="SecretRedactionPolicy"/>'s rather than this file's, because it
-    /// binds the code that MINTS secrets as much as this: a shorter value silently gets no literal
-    /// redaction at all, and the caller — not this file — is where a generator that produced one
-    /// would have to be fixed. Stating it in a shared, public place is what lets a generator's own
-    /// test hold itself to it.
-    /// </remarks>
-    private static string RemoveSentSecret(string text, SensitiveString? sentSecret)
-    {
-        if (sentSecret is null)
-        {
-            return text;
-        }
-
-        var value = sentSecret.Reveal();
-
-        if (value.Length < SecretRedactionPolicy.ShortestRecognisableSecret)
-        {
-            return text;
-        }
-
-        return text.Replace(value, RedactedSecret, StringComparison.Ordinal);
-    }
-
-    /// <summary>The PEM block pattern: a BEGIN marker through its END marker, or through the end.</summary>
-    /// <returns>The generated matcher.</returns>
-    [GeneratedRegex(@"-----BEGIN[\s\S]*?(?:-----END[^-]*-----|$)")]
-    private static partial Regex PemBlock();
-
-    /// <summary>The bare-material pattern: an unbroken run of forty or more base64 characters.</summary>
-    /// <returns>The generated matcher.</returns>
-    [GeneratedRegex("[A-Za-z0-9+/=]{40,}")]
-    private static partial Regex Base64Run();
 }

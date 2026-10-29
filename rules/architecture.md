@@ -111,6 +111,10 @@ backend/               C# modular monolith (rules/csharp.md)
 agent/                 Rust root daemon (rules/rust.md)
 frontend/              Vue 3 SPA (rules/vue.md)
 installer/             native production install: lib/ (numbered steps), systemd/, nginx/
+installer/cli/         the root-only `maran` break-glass command (status, admin-reset-password,
+                       collect-diagnostics): a fixed-verb wrapper plus lib/, installed by lib/66-cli.sh
+                       to /usr/local/sbin; it adds no daemon, port or RPC and reaches the panel only
+                       through `Maran.Host --cli` run as the service account
 docker/                DEVELOPMENT ONLY: compose + polygon/ distro images
 scripts/               maran (the toolbox entry point), dev (sourced: PATH and keys), lib/
 rules/                 these rules — the single source of structure and law

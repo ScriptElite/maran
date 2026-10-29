@@ -670,6 +670,12 @@ write_config() {
       echo "# trusted certificate for it. Absent means no host-specific refusal; the fixed set of"
       echo "# reserved names (addresses, localhost, special-use suffixes) applies either way."
       echo "Panel__HostName=${panel_host_name}"
+      echo ""
+      echo "# The address the panel is reached at: https://<that host name>:<the panel port>. Links the"
+      echo "# panel builds outside a request (an invitation, a password reset issued by the recovery"
+      echo "# command) start with it. Not a secret; re-derived on every re-run. Absent when the host has"
+      echo "# no usable name, because a guessed address in a credential link is worse than none."
+      echo "PasswordReset__PanelUrl=https://${panel_host_name}:${MARAN_PANEL_PORT}"
     fi
     if [ -n "$seed_cidr" ]; then
       echo ""

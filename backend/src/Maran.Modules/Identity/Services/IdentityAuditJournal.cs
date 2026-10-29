@@ -57,6 +57,12 @@ public sealed class IdentityAuditJournal
     /// </remarks>
     public const string ModuleName = "identity";
 
+    /// <summary>What the address column says for an entry written from the server's own console.</summary>
+    public const string ConsoleOrigin = "local-console";
+
+    /// <summary>Prefix marking the user-agent column of a console entry as an unverified operator claim.</summary>
+    public const string OperatorClaimPrefix = "operator-claim:";
+
     /// <summary>The panel's append-only journal.</summary>
     private readonly IAuditWriter _auditWriter;
 
@@ -169,6 +175,42 @@ public sealed class IdentityAuditJournal
             ipAddress,
             userAgent,
             succeeded: false,
+            cancellationToken);
+    }
+
+    /// <summary>Records a break-glass recovery run from the server's console, or its refusal.</summary>
+    /// <param name="subject">
+    /// What was acted on: the administrator's user id once one was resolved, otherwise the identifier
+    /// the operator typed. Never a token, its digest, or the link.
+    /// </param>
+    /// <param name="operatorClaim">
+    /// The operator's name as the console reported it (<c>SUDO_USER</c>). Recorded in the user-agent
+    /// column prefixed <c>operator-claim:</c>, because nothing verified it: shell access is the
+    /// authority, and the name is a hint for whoever reads the row.
+    /// </param>
+    /// <param name="succeeded">Whether a recovery was issued.</param>
+    /// <param name="cancellationToken">Cancellation token for the write.</param>
+    /// <returns>Resolves once the entry is stored.</returns>
+    /// <remarks>
+    /// The actor is the panel itself (<see cref="SystemAuditEntry.NameFor"/>), with no verified user id:
+    /// the console has no principal, and writing the claimed name into the actor columns would put an
+    /// unproven person in the "who" column. The address column says the entry came from the local
+    /// console rather than leaving it blank.
+    /// </remarks>
+    public async Task RecordConsoleRecoveryAsync(
+        string subject,
+        string operatorClaim,
+        bool succeeded,
+        CancellationToken cancellationToken)
+    {
+        await WriteAsync(
+            null,
+            SystemAuditEntry.NameFor(ModuleName),
+            AuditActions.ConsoleRecovery,
+            subject,
+            ConsoleOrigin,
+            OperatorClaimPrefix + operatorClaim,
+            succeeded,
             cancellationToken);
     }
 
