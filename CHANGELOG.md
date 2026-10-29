@@ -12,6 +12,13 @@ frontend entries for either architecture. A local build without `--publish` stil
 An installer run on an architecture the release was not built for now says so plainly, naming the
 architecture, instead of reporting only a missing manifest entry.
 
+**Plans can be created, edited and deleted from the panel.** Administrators manage hosting plans under
+Plans: a name is unique regardless of case, a plan with accounts on it cannot be deleted, and a changed
+disk quota is pushed to the accounts already on it. A quota cannot be lowered below any account's usage;
+every account is measured first and a refusal leaves all of them untouched. Count limits only gate new
+sites, databases and logins, never what an account already has. Reference: the Hosting accounts page of
+the documentation.
+
 **An administrator locked out of the panel now has a supported way back in.** When the only administrator
 lost a password or an authenticator and no mail was configured, the only options were editing the
 database by hand, which leaves no audit row, or reinstalling. The installer now places a root-only
