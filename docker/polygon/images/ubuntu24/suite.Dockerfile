@@ -224,6 +224,7 @@ COPY installer/panel.env.example /tmp/maran-installer/panel.env.example
 # runs needs its COPY here; these are those four.
 COPY installer/systemd/maran-api.service /tmp/maran-installer/systemd/maran-api.service
 COPY installer/systemd/maran-api.tmpfiles.conf /tmp/maran-installer/systemd/maran-api.tmpfiles.conf
+COPY installer/systemd/maran-php.tmpfiles.conf /tmp/maran-installer/systemd/maran-php.tmpfiles.conf
 COPY installer/systemd/maran-agent.service /tmp/maran-installer/systemd/maran-agent.service
 # Step 70's install_units renders and installs the package-install template with the units above
 # (issue #93), so it must be here or the step aborts on a missing source and no suite runs.
@@ -378,7 +379,6 @@ COPY installer/lib/40-user.sh /tmp/maran-installer/lib/40-user.sh
 # used to chmod /run/maran to 0755 instead, which hid that the real mode locks nginx out of every
 # pool socket. It is applied in the step below, where systemd-tmpfiles is already known to be
 # present (the panel socket assertion runs it from this same image).
-COPY installer/systemd/maran-php.tmpfiles.conf /tmp/maran-installer/systemd/maran-php.tmpfiles.conf
 RUN bash -c 'set -euo pipefail; \
       MARAN_USER="$(sed -n "s/^MARAN_USER=//p" /tmp/maran-installer/install.sh)"; \
       MARAN_GROUP="$(sed -n "s/^MARAN_GROUP=//p" /tmp/maran-installer/install.sh)"; \
