@@ -10,7 +10,7 @@
 #
 # What lives here:
 #
-#   dev_ready_database         the postgres container's own healthcheck
+#   dev_ready_database         the postgres container's own healthcheck, then the published host port
 #   dev_ready_http             an endpoint answers, and the process behind it is still alive
 #   dev_ready_agent_container  the agent container's compose healthcheck (MariaDB AND the socket)
 #   dev_ready_panel_health     /health's VALUES for the api+agent pair — THE readiness truth
@@ -20,14 +20,26 @@
 # payload it accepted, which every later report quotes as its evidence.
 
 dev_ready_database() { # blocks until the container reports healthy, so the API never races it
-  local attempt
+  local attempt want published
+  want="${Database__Port:-5432}"
   for attempt in $(seq 60); do
     if [ "$(docker inspect -f '{{.State.Health.Status}}' maran-postgres 2>/dev/null)" = "healthy" ]; then
+      # A healthy container proves postgres answers INSIDE docker, not that the API can reach it:
+      # the API connects to 127.0.0.1:Database__Port. A container reused from an earlier run may
+      # publish another port, and compose is deliberately not asked to recreate it (see
+      # dev_stage_database), so the published port is read back and compared instead of assumed.
+      published="$(docker port maran-postgres 5432/tcp 2>/dev/null | sed -n '1s/.*://p')"
+      if [ -n "$published" ] && [ "$published" != "$want" ]; then
+        echo "maran-postgres is published on 127.0.0.1:$published but Database__Port is $want, so the" >&2
+        echo "API would connect to the wrong server. Recreate it on the configured port:" >&2
+        echo "  maran dev --stop   (then run maran dev again)" >&2
+        return 1
+      fi
       return 0
     fi
     sleep 1
   done
-  echo "the database did not become healthy within 60 seconds" >&2
+  echo "the database (127.0.0.1:$want) did not become healthy within 60 seconds" >&2
   return 1
 }
 

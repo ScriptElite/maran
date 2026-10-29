@@ -19,8 +19,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-maran_dev}
       POSTGRES_DB: ${POSTGRES_DB:-maran_dev}
     ports:
-      # Only the host port is configurable: the container always listens on 5432.
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Only the host port is configurable: the container always listens on 5432. One setting
+      # drives the whole stack: `Database__Port` (the root .env, exported by scripts/dev) is what
+      # the API connects to, so it is also what is published here. POSTGRES_PORT in docker/.env
+      # still wins when set, so a setup that already uses it keeps working; unset, the default
+      # stays 5432. Published on loopback only: a development database with a well-known
+      # password has no business answering the local network.
+      - "127.0.0.1:${POSTGRES_PORT:-${Database__Port:-5432}}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
