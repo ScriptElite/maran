@@ -143,16 +143,19 @@ broken by the move; but they do not heal by themselves either.
   every writer of a system config, installer shell included (rules/rust.md "Config writes"); an edit
   that skips render, atomic swap, `nginx -t`/`php-fpm -t`, reload and rollback is exactly what that
   paragraph forbids.
-- **Proposed:** the panel re-renders each PHP site through the existing agent path (the one a PHP
-  version switch uses, with the version unchanged), once, after the upgrade. Order per site:
+- **Decided (Decision 3):** the panel reconciles every PHP site when it starts, through the existing
+  `UpdateSitePhpVersion` rpc. A same-version call now converges the pool and then the vhost,
+  writing only what differs, so a site already on the new path is not rewritten. No new rpc and no
+  new capability. Order per site:
   (a) the new directory exists (tmpfiles, installer step 70) before the agent is restarted onto the
   new unit; (b) agent restarted; (c) the pool is rewritten, `php-fpm -t`, reload, so the master
   binds the new path; (d) the vhost is rewritten, `nginx -t`, reload. Pool before vhost: the
   reverse order leaves nginx pointing at a socket nobody has bound yet. Either order has a window
-  between (c) and (d) in which that one site answers 502; on an affected install that is what it
-  answers already. An install where an operator worked around the defect by hand (loosened
-  `/run/maran`, added the web user to a group) has working sites and WILL see that window. How the
-  panel triggers the re-render is Decision 3.
+  between (c) and (d) in which that one site answers 502 (the one-reload window); on an affected
+  install that is what it answers already. An install where an operator worked around the defect by hand (loosened
+  `/run/maran`, added the web user to a group) has working sites and WILL see that window. Whether the
+  pool step needs a reload or a restart to re-bind the socket is still to be measured on the
+  polygon (see "cannot verify").
 - The old `/run/maran/php` is left alone: it disappears when the agent unit next stops (above) and
   at reboot. Nothing may recurse into it.
 - Rollback: the previous agent and the previous templates name the old path and the old unit does
@@ -199,7 +202,7 @@ broken by the move; but they do not heal by themselves either.
   leaves `/run` writable by reading; not confirmed per version) and whether it can create a socket
   under a directory it did not make.
 - Whether php-fpm re-binds a changed `listen =` on a graceful reload or needs a restart; this decides
-  step (c) of the migration.
+  step (c) of the migration. Reload versus restart is still to be measured on the polygon.
 - That systemd-tmpfiles runs before php-fpm at boot on every supported release (Ubuntu 22.04, 24.04,
   Debian 12, 13, Alma/Rocky 9, 10), and the `RuntimeDirectory` removal-on-stop claim above.
 - Whether `/home` is listable on a real install (it decides whether listing socket names discloses
@@ -219,11 +222,10 @@ State: no reviewer has read this note or the diff. The branch carrying the chang
    agent unit, exists at boot before php-fpm). Rejected: a second `RuntimeDirectory=` in the agent
    unit (shares the unit's single mode and dies with the unit, keeping the restart defect) and
    `write_pool`'s create alone (leaves the boot-time bind failure).
-3. **Migration trigger: OPEN.** The panel re-renders every PHP site once after upgrade
-   (recommended), or an operator action, or no migration and sites heal on their next re-render. A
-   new agent rpc for a bulk re-render would need a spec change, a proto addition and an
-   `AgentCapability` declaration (rules/security.md items 12 and 13); the note recommends reusing
-   the existing per-site path.
+3. **Migration trigger: RESOLVED.** The panel reconciles every PHP site at start
+   through the existing `UpdateSitePhpVersion` rpc, whose same-version call converges pool then
+   vhost, writing only what differs. Rejected: a new bulk rpc (would need a spec change, a proto
+   addition and an `AgentCapability` declaration, rules/security.md items 12 and 13).
 4. **The 0751 stopgap: RESOLVED, refused**, including as an interim. Adding the web user to group
    `maran` is likewise refused.
 5. **RHEL scope: OPEN.** Whether this branch may be proposed for merge before a run on an
