@@ -76,7 +76,10 @@ username="${Database__Username:-maran_dev}"
 password="${Database__Password:-maran_dev}"
 
 # psql runs inside the database container, so the developer needs no client installed. The
-# container name is the one docker-compose.dev.yml fixes.
+# container name is the one docker-compose.dev.yml fixes. `-p 5432` is the CONTAINER's own port and
+# is deliberately not "$port": the host port is only where compose publishes it, and inside the
+# container postgres always listens on 5432, so a remapped Database__Port must not reach psql here.
+# "$port" is what the messages below report, because it is the one the API connects to.
 psql_query() {
   docker exec -e PGPASSWORD="$password" maran-postgres \
     psql -qtAX -h 127.0.0.1 -p 5432 -U "$username" -d "$database" -c "$1" 2>&1

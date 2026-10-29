@@ -125,9 +125,13 @@ if (exec 3<>/dev/tcp/127.0.0.1/5081) 2>/dev/null; then
   did_not_run "127.0.0.1:5081 is already in use, so this command's own API could not have bound it."
 fi
 
+# One port setting for the whole seam: Database__Port (.env via scripts/dev, default 5432) is what
+# the API connects to and what the development compose file publishes, so it is also what is probed.
+db_port="${Database__Port:-5432}"
+
 # A database the API can reach. In CI a service container already listens; locally the development
 # compose file is the same database `scripts/maran dev` uses.
-if ! (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then
+if ! (exec 3<>/dev/tcp/127.0.0.1/$db_port) 2>/dev/null; then
   if command -v docker >/dev/null 2>&1; then
     echo "starting the development database"
     docker compose -f "$root/docker/docker-compose.dev.yml" up -d >/dev/null 2>&1
@@ -151,7 +155,7 @@ if ! (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then
   else
     # A fact about the machine, not about the contract. This was `fail` — the word FAILED for a
     # workstation with no PostgreSQL and no docker.
-    echo "REFUSED: no database on 127.0.0.1:5432 and no docker to start one. The API refuses to" >&2
+    echo "REFUSED: no database on 127.0.0.1:$db_port and no docker to start one. The API refuses to" >&2
     echo "         boot without one (rules/architecture.md), so the seam cannot be reached." >&2
     did_not_run "no panel database is reachable and there is no docker to start one."
   fi
@@ -206,8 +210,8 @@ done
 health_status=0
 health="$(curl -fsS --max-time 5 "$api_url/health" 2>/dev/null)" || health_status=$?
 if [ "$health_status" -ne 0 ]; then
-  if ! (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then
-    echo "REFUSED: the API never answered AND 127.0.0.1:5432 is not accepting connections — the" >&2
+  if ! (exec 3<>/dev/tcp/127.0.0.1/$db_port) 2>/dev/null; then
+    echo "REFUSED: the API never answered AND 127.0.0.1:$db_port is not accepting connections — the" >&2
     echo "         database went away under it, so this says nothing about the contract." >&2
     did_not_run "the panel database stopped being reachable while the API was starting."
   fi
