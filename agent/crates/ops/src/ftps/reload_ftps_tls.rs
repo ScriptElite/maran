@@ -10,6 +10,7 @@ use crate::ftps::ftps_host::FtpsHost;
 use crate::ftps::get_ftps_status::get_ftps_status;
 use crate::ftps::model::ftps_state::FtpsState;
 use crate::ftps::model::ftps_unit::FtpsUnit;
+use crate::ftps::wait_for_control_port::wait_for_control_port;
 
 /// Restarts a RUNNING FTPS daemon so it re-reads its certificate and key, then
 /// checks that it came back.
@@ -38,7 +39,7 @@ use crate::ftps::model::ftps_unit::FtpsUnit;
 ///
 /// Returns [`FtpsError::ServiceRefused`] when the restart fails or the unit is
 /// not active afterwards, and [`FtpsError::NotListening`] when the unit is active
-/// and the control port has stopped answering — which is the shape a certificate
+/// and the control port has not answered within the bounded wait — which is the shape a certificate
 /// whose key does not match produces, since it parses perfectly and dies at the
 /// first handshake. Returns [`FtpsError::SpawnFailed`] when the service manager
 /// cannot be started at all, [`FtpsError::Bound`] when the restart outruns its
@@ -64,6 +65,10 @@ pub fn reload_ftps_tls(
             unit: AgentPaths::FTPS_UNIT.to_owned(),
         });
     }
+
+    // The restart returns once the process is forked, before the socket is
+    // bound, so the daemon gets a bounded wait before it is called silent.
+    wait_for_control_port(host);
 
     let after = get_ftps_status(host, distro, None)?;
     if !after.running {
