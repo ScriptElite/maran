@@ -8,6 +8,7 @@
 mod account_error;
 mod account_lock;
 mod account_operations;
+mod end_account_processes;
 pub mod model;
 mod process_system_host;
 mod quota_blocks;

@@ -10,6 +10,7 @@ use maran_agent_core::validation::system::name::AccountName;
 use maran_distro::{AdapterBinary, DistroAdapter};
 
 use crate::accounts::account_lock::take_account_lock;
+use crate::accounts::end_account_processes::end_account_processes;
 use crate::accounts::model::home_group_repair_refusal::HomeGroupRepairRefusal;
 use crate::accounts::model::home_group_repair_report::HomeGroupRepairReport;
 use crate::accounts::model::quota_state::QuotaState;
@@ -657,6 +658,13 @@ impl<H: SystemHost> AccountOperations<H> {
     ///   deleting the customer's files from inside the jail, and a mount left
     ///   behind afterwards points at a home that no longer exists — a state the
     ///   uninstaller refuses to clean up and a re-created account would inherit.
+    /// - The account's PROCESSES are killed and verified gone
+    ///   (`end_account_processes`) after the last step that could start one and
+    ///   before `userdel`. `userdel` is no safety net here: its refusal of a user
+    ///   with live processes needs `CAP_SYS_PTRACE`, which this agent lacks by
+    ///   design, so it would exit 0 and free a uid a survivor still runs as, which
+    ///   the next account created would inherit. A survivor after the bounded
+    ///   rounds stops the deletion with [`AccountError::ProcessesRemain`].
     ///
     /// That second ordering is not hypothetical for the pools: it is the state
     /// the agent shipped in, because nothing removed a pool at all.
@@ -703,7 +711,12 @@ impl<H: SystemHost> AccountOperations<H> {
     ///   wrong one finds nothing wrong there.
     /// - [`AccountError::PoolRemoval`] when one of its pools could not be taken
     ///   away.
-    /// - [`AccountError::CommandFailed`] when `crontab` refused to remove the
+    /// - [`AccountError::ProcessesRemain`] when processes of the account's uid
+    ///   were still running after every kill round. Raised after the crontab and
+    ///   pool sweeps and before `userdel`, so the account is still present and the
+    ///   same deletion converges once the survivor has exited.
+    /// - [`AccountError::CommandFailed`] when `pkill` answered neither "matched"
+    ///   nor "nothing matched", or `crontab` refused to remove the
     ///   account's table for any reason other than there not being one.
     /// - [`AccountError::Busy`] when another operation for this account — a
     ///   backup, a restore, an SFTP login creation, a pool write or another
@@ -744,6 +757,11 @@ impl<H: SystemHost> AccountOperations<H> {
     /// refused user costs no database drop, no login teardown and no
     /// `crontab -u <name> -r`, and resolves it AGAIN after the last wait,
     /// comparing user and group ids with the first resolution before `userdel`.
+    ///
+    /// Between the second crontab sweep and that second resolution it ends every
+    /// process of the account's uid (`end_account_processes`): a bounded kill and
+    /// verify loop that refuses with [`AccountError::ProcessesRemain`], before
+    /// `userdel`, when something survives.
     ///
     /// Split from [`AccountOperations::delete`] for the reason
     /// `restore_backup`'s body is split from its entry point: the lock is a
@@ -841,6 +859,16 @@ impl<H: SystemHost> AccountOperations<H> {
             let _crontab = cron_lock(account.name());
             self.remove_crontab(&account)?;
         }
+
+        // The account's processes end HERE: after the last step that can start
+        // one (the pool sweep reloads php-fpm, which runs workers as this uid),
+        // and before the identity re-check so the freshest fact precedes the
+        // irreversible step. `userdel` is not a guard: its busy-user refusal needs
+        // `CAP_SYS_PTRACE`, which this agent's bounding set lacks by design, so
+        // it would free the uid with a process still running as it and the next
+        // `useradd` would hand that process to a new tenant. The lock held here
+        // is outer and never waits, so the rounds' pauses add no wait-for edge.
+        end_account_processes(&self.host, self.distro, &account)?;
 
         // Resolved again, immediately before the irreversible step, and the ids are
         // compared with the first resolution. The lock above excludes every

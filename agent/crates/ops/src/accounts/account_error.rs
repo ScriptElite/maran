@@ -292,6 +292,29 @@ pub enum AccountError {
         /// What the FTPS area refused with.
         reason: String,
     },
+
+    /// Processes were still running as the account's uid after every round of
+    /// the cull, so the deletion stopped before `userdel`.
+    ///
+    /// `userdel` is NOT the guard against this: it refuses a user with live
+    /// processes only by reading `/proc/<pid>/root`, which the kernel allows for
+    /// another uid's process only to a caller holding `CAP_SYS_PTRACE`, and this
+    /// agent's bounding set deliberately lacks it. Run anyway, `userdel` exits 0,
+    /// the uid is freed, and the next `useradd` hands it to a new tenant who then
+    /// owns the survivor. So the survivor is refused here, while the account
+    /// still exists.
+    ///
+    /// The account is half-deleted RECOVERABLY: its databases, logins, crontab
+    /// and pools are gone and the user, its uid and its home remain. The same
+    /// deletion repeated converges once the survivor has exited (rules/rust.md
+    /// "Idempotency"). Carries the name only: no pid, command line or count
+    /// reaches a customer-facing message; the operator-side detail is the log
+    /// line the deletion writes.
+    #[error("processes of account '{username}' are still running after being killed")]
+    ProcessesRemain {
+        /// The account whose processes survived.
+        username: String,
+    },
 }
 
 impl AccountError {

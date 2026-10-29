@@ -396,3 +396,19 @@ fn the_bound_variant_is_mapped_by_name_ahead_of_the_wildcard() {
     let wildcard = wildcard.expect("the mapping ends in a wildcard arm");
     assert!(bound.expect("the bound variant has its own arm") < wildcard);
 }
+
+#[test]
+fn surviving_processes_are_a_system_failure_whose_message_names_only_the_account() {
+    // The account is still there and the same deletion can be retried, so the
+    // panel must report a fault. The message must carry no pid, command line or
+    // count: those are operator-side detail.
+    let error = AccountError::ProcessesRemain {
+        username: "acme".to_owned(),
+    };
+
+    assert_eq!(code_of(&error), ErrorCode::SystemFailure as i32);
+    assert_eq!(
+        error.to_string(),
+        "processes of account 'acme' are still running after being killed"
+    );
+}

@@ -228,6 +228,9 @@ agent/
     │                          (how much room the filesystem UNDER a given directory
     │                          still has, asked at the directory the write lands on and
     │                          never at its parent — a parent can be a different mount) ·
+    │                          pkill_uid_arguments.rs · pkill_answer.rs (the one
+    │                          spelling of a uid-wide pkill and of what its exit status
+    │                          means, shared by suspension and deletion, issue #103) ·
     │                          apply_child_environment.rs
     │                          — the ONE environment any of them gives a child (cleared,
     │                          then the declared entries). A host whose spawn is

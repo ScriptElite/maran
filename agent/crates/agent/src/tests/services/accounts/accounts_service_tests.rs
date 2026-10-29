@@ -196,6 +196,9 @@ impl SystemHost for BlockingSystemHost {
     ) -> Result<Option<maran_ops::accounts::model::home_metadata::HomeMetadata>, AccountError> {
         unreachable!("no rpc in this file inspects a home's metadata")
     }
+
+    /// Returns at once: virtual time, and no rpc driven here deletes an account.
+    fn pause(&self, _interval: Duration) {}
 }
 
 /// The php host the service holds for the deletion cascade.
