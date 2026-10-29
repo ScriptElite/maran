@@ -88,7 +88,7 @@ const FTPS_LOG_PATH: &str = "/var/log/maran/ftps.log";
 /// whether it is active, and then this function asks the daemon itself for a
 /// `220` greeting on the control port — waiting up to a bounded deadline for it,
 /// because `Type=simple` returns from the restart before the socket is bound
-/// (see [`wait_for_control_port`]). That is the layer that catches what no
+/// (see `wait_for_control_port`). That is the layer that catches what no
 /// parse can: a certificate whose key does not match parses perfectly and fails
 /// at the first handshake; a port something else already holds leaves a unit
 /// systemd is happy with. Either answer being no restores the previous
