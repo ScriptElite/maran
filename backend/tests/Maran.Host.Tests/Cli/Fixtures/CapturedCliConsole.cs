@@ -5,6 +5,9 @@ namespace Maran.Host.Tests.Cli.Fixtures;
 /// <summary>A <see cref="CliConsole"/> whose output streams a test can read back.</summary>
 internal sealed class CapturedCliConsole : IDisposable
 {
+    /// <summary>Delivers the text a verb reads from standard input.</summary>
+    private readonly StringReader _input;
+
     /// <summary>Collects what the verb wrote to standard output.</summary>
     private readonly StringWriter _output = new();
 
@@ -15,7 +18,8 @@ internal sealed class CapturedCliConsole : IDisposable
     /// <param name="input">What standard input will deliver.</param>
     public CapturedCliConsole(string input = "")
     {
-        Console = new CliConsole(new StringReader(input), _output, _error);
+        _input = new StringReader(input);
+        Console = new CliConsole(_input, _output, _error);
     }
 
     /// <summary>The console to hand to a verb.</summary>
@@ -33,9 +37,10 @@ internal sealed class CapturedCliConsole : IDisposable
         get { return _error.ToString(); }
     }
 
-    /// <summary>Releases the captured output writers.</summary>
+    /// <summary>Releases the input reader and the captured output writers.</summary>
     public void Dispose()
     {
+        _input.Dispose();
         _output.Dispose();
         _error.Dispose();
     }

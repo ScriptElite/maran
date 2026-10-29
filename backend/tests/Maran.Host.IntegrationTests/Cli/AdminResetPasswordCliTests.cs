@@ -39,6 +39,9 @@ public sealed class AdminResetPasswordCliTests : IAsyncLifetime
 
     private readonly TestDatabase _pg;
 
+    /// <summary>The unconfigured factories each derived factory was built from, released with the test.</summary>
+    private readonly List<WebApplicationFactory<Program>> _roots = new();
+
     /// <summary>Binds this test to the PostgreSQL server the assembly shares.</summary>
     /// <param name="postgres">The shared server, injected by the collection fixture.</param>
     public AdminResetPasswordCliTests(PostgresFixture postgres)
@@ -52,17 +55,22 @@ public sealed class AdminResetPasswordCliTests : IAsyncLifetime
         return _pg.CreateAsync();
     }
 
-    /// <summary>Nothing to release: the shared server owns the databases.</summary>
-    public Task DisposeAsync()
+    /// <summary>Releases the root factories; the shared server owns the databases.</summary>
+    public async Task DisposeAsync()
     {
-        return Task.CompletedTask;
+        foreach (var root in _roots)
+        {
+            await root.DisposeAsync();
+        }
     }
 
     /// <summary>Boots the real panel against the test database.</summary>
     /// <returns>The configured factory.</returns>
     private WebApplicationFactory<Program> CreateFactory()
     {
-        return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        var root = new WebApplicationFactory<Program>();
+        _roots.Add(root);
+        return root.WithWebHostBuilder(builder =>
         {
             builder.UseEnvironment("Testing");
             foreach (var setting in DatabaseSettings.From(_pg.GetConnectionString()))
@@ -131,13 +139,14 @@ public sealed class AdminResetPasswordCliTests : IAsyncLifetime
         bool terminal,
         params string[] arguments)
     {
-        var output = new StringWriter();
-        var error = new StringWriter();
+        using var input = new StringReader(string.Empty);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
         var runner = factory.Services.GetRequiredService<CliRunner>();
 
         var status = await runner.RunAsync(
             new CliInvocation(Verb, arguments, terminal, false, "alice"),
-            new CliConsole(new StringReader(string.Empty), output, error),
+            new CliConsole(input, output, error),
             CancellationToken.None);
 
         return (status, output.ToString(), error.ToString());

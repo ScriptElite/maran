@@ -91,6 +91,8 @@ public sealed class StatusCliCommand : ICliCommand
             }
             catch (Exception exception)
             {
+                // Deliberately broad: one failing check degrades to a FAIL line so the remaining checks still run.
+                // Cancellation is not swallowed: the caller's own cancellation is rethrown by the clause above.
                 // The type only: a message from a failed connection can quote the connection string.
                 outcome = (false, $"check failed ({exception.GetType().Name})");
             }

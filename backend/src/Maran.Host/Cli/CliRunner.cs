@@ -67,6 +67,9 @@ public sealed class CliRunner
         }
         catch (Exception exception)
         {
+            // Deliberately broad: this is the top-level boundary of the CLI, and whatever a verb throws must be
+            // reported and turned into an exit status rather than a runtime crash dump. Cancellation is not
+            // swallowed here: the filtered clause above takes the caller's own cancellation first.
             // The message is scrubbed: a connection failure can quote the connection string, and this
             // text goes to a terminal and from there to a ticket.
             var text = SecretTextRedactor.RedactDiagnostics(
