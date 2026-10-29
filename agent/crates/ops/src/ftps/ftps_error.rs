@@ -83,7 +83,9 @@ pub enum FtpsError {
     /// does not match parses perfectly and dies at the first handshake, and a
     /// port something else already holds leaves a unit systemd is happy with.
     /// This is what the post-swap observation exists to catch, and reaching it
-    /// restores the previous configuration.
+    /// restores the previous configuration. It is only returned after the bounded
+    /// wait for the control port (`wait_for_control_port`) has run out, so a
+    /// daemon that is merely slow to bind is not reported as silent.
     #[error("the ftps daemon is not answering on its control port")]
     NotListening,
 

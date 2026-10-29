@@ -19,10 +19,10 @@ use crate::ftps::model::listen_mode::ListenMode;
 /// Explicit FTPS on 21 (`AUTH TLS`, RFC 4217) rather than implicit FTPS on 990:
 /// one port to open, and the port an operator already understands. Not
 /// configurable, so it is a constant here and not a field of anything.
-const CONTROL_PORT: u16 = 21;
+pub(crate) const CONTROL_PORT: u16 = 21;
 
 /// The greeting a healthy FTP control connection opens with.
-const GREETING: &str = "220";
+pub(crate) const GREETING: &str = "220";
 
 /// Reads the FTPS daemon's state off the host: the service manager's answer, the
 /// control port's answer, and the configuration file the daemon actually serves.

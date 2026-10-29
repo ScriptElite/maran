@@ -147,6 +147,21 @@ pub trait FtpsHost: Send + Sync {
     /// this seam's.
     fn control_port_greeting(&self, port: u16) -> Option<String>;
 
+    /// Sleeps the calling thread for `duration`.
+    ///
+    /// A seam and not a `thread::sleep` in the operation, so a test drives the
+    /// wait for a daemon to bind as virtual time instead of really sleeping
+    /// (rules/testing.md "Determinism": no sleeps, inject the clock).
+    fn pause(&self, duration: Duration);
+
+    /// Time elapsed since an arbitrary, fixed origin on a monotonic clock.
+    ///
+    /// Only differences between two readings mean anything. It is the other half
+    /// of [`Self::pause`]: a deadline is checked against this, and not against a
+    /// count of pauses, because a probe can itself take seconds (a daemon that
+    /// accepts and stays silent) and a count would not bound that.
+    fn monotonic_now(&self) -> Duration;
+
     /// Answers what certificate material is installed for `domain`.
     ///
     /// Delegates to `ops::ssl::certificate_state`, which reads three file names

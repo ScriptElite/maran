@@ -420,6 +420,16 @@ impl FtpsHost for UnusedFtpsHost {
     }
 
     /// Unreachable: see [`UnusedFtpsHost`].
+    fn pause(&self, _duration: Duration) {
+        unreachable!("no rpc in this file reaches the ftps host")
+    }
+
+    /// Unreachable: see [`UnusedFtpsHost`].
+    fn monotonic_now(&self) -> Duration {
+        unreachable!("no rpc in this file reaches the ftps host")
+    }
+
+    /// Unreachable: see [`UnusedFtpsHost`].
     fn certificate_state(&self, _domain: &Domain) -> Result<CertificateState, FtpsError> {
         unreachable!("no rpc in this file reaches the ftps host")
     }

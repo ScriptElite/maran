@@ -115,6 +115,18 @@ pub(crate) struct FakeFtpsHost {
     ipv6_bind_error: Option<ErrorKind>,
     /// Whether the control port answers once the daemon is up.
     control_port_answers: bool,
+    /// How long after a restart the control port starts answering, in virtual
+    /// time; `ZERO` is "at once".
+    bind_delay: Mutex<Duration>,
+    /// The virtual time of the last restart, or `None` when the daemon was
+    /// already up before the fake's clock started.
+    restarted_at: Mutex<Option<Duration>>,
+    /// The fake's virtual monotonic clock, advanced only by [`FtpsHost::pause`].
+    clock: Mutex<Duration>,
+    /// Every pause the code asked for, in order.
+    pauses: Mutex<Vec<Duration>>,
+    /// How many times the control port was probed.
+    probes: Mutex<usize>,
     /// What the control port says when it answers.
     greeting: String,
     /// Whether a restart brings the daemon up, or exits non-zero.
@@ -226,6 +238,11 @@ impl FakeFtpsHost {
             candidate_refusal: None,
             ipv6_bind_error: None,
             control_port_answers: true,
+            bind_delay: Mutex::new(Duration::ZERO),
+            restarted_at: Mutex::new(None),
+            clock: Mutex::new(Duration::ZERO),
+            pauses: Mutex::new(Vec::new()),
+            probes: Mutex::new(0),
             greeting: GREETING.to_owned(),
             restart_succeeds: true,
             config_readable: true,
@@ -715,6 +732,34 @@ impl FakeFtpsHost {
         self
     }
 
+    /// The daemon binds its control port `delay` of virtual time after each
+    /// restart, as vsftpd does after `systemctl restart` returns.
+    pub(crate) fn answering_after(self, delay: Duration) -> Self {
+        self.set_bind_delay(delay);
+        self
+    }
+
+    /// Changes the bind delay of a host that is already in use, so one test can
+    /// fail an enable and then retry it against a healthy daemon.
+    pub(crate) fn set_bind_delay(&self, delay: Duration) {
+        *self.bind_delay.lock().unwrap() = delay;
+    }
+
+    /// Every pause the code under test asked for, in order.
+    pub(crate) fn pauses(&self) -> Vec<Duration> {
+        self.pauses.lock().unwrap().clone()
+    }
+
+    /// How many times the control port was probed.
+    pub(crate) fn probes(&self) -> usize {
+        *self.probes.lock().unwrap()
+    }
+
+    /// The virtual time that has passed, which is the sum of every pause.
+    pub(crate) fn elapsed(&self) -> Duration {
+        *self.clock.lock().unwrap()
+    }
+
     /// The control port answers with `line` instead of a `220` greeting.
     pub(crate) fn greeting_of(mut self, line: &str) -> Self {
         self.greeting = line.to_owned();
@@ -841,6 +886,7 @@ impl FakeFtpsHost {
         match arguments.first().copied() {
             Some("restart") => {
                 *self.running.lock().unwrap() = self.restart_succeeds;
+                *self.restarted_at.lock().unwrap() = Some(*self.clock.lock().unwrap());
                 CommandOutcome {
                     status: i32::from(!self.restart_succeeds),
                     stdout: String::new(),
@@ -1104,7 +1150,13 @@ impl FtpsHost for FakeFtpsHost {
     }
 
     fn control_port_greeting(&self, _port: u16) -> Option<String> {
-        if *self.running.lock().unwrap() && self.control_port_answers {
+        *self.probes.lock().unwrap() += 1;
+        let now = *self.clock.lock().unwrap();
+        let bound = match *self.restarted_at.lock().unwrap() {
+            Some(restarted) => now.saturating_sub(restarted) >= *self.bind_delay.lock().unwrap(),
+            None => true,
+        };
+        if *self.running.lock().unwrap() && self.control_port_answers && bound {
             Some(self.greeting.clone())
         } else {
             None
@@ -1228,7 +1280,19 @@ impl FtpsHost for FakeFtpsHost {
         self.unit_file_exists(&path) || self.directory_still_exists(&path)
     }
 
+    fn pause(&self, duration: Duration) {
+        self.pauses.lock().unwrap().push(duration);
+        *self.clock.lock().unwrap() += duration;
+    }
+
+    fn monotonic_now(&self) -> Duration {
+        *self.clock.lock().unwrap()
+    }
+
     fn remove_file(&self, path: &Path) -> Result<(), FtpsError> {
+        if path == Path::new(AgentPaths::VSFTPD_CONFIG_PATH) {
+            *self.live.lock().unwrap() = None;
+        }
         let path = path.to_string_lossy().into_owned();
         self.unit_files
             .lock()

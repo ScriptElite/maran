@@ -4,7 +4,7 @@ use std::io::{Read as _, Write as _};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use maran_agent_core::agent_paths::AgentPaths;
 use maran_agent_core::command_outcome::CommandOutcome;
@@ -72,6 +72,9 @@ pub struct ProcessFtpsHost {
     /// exists and never writes any, so it reads the store through the code that
     /// owns it instead of learning the store's layout for itself.
     ssl: ProcessSslHost,
+    /// The instant this host was created, the origin
+    /// [`FtpsHost::monotonic_now`] measures from.
+    origin: Instant,
 }
 
 impl ProcessFtpsHost {
@@ -80,6 +83,7 @@ impl ProcessFtpsHost {
     pub fn new() -> Self {
         Self {
             ssl: ProcessSslHost::new(),
+            origin: Instant::now(),
         }
     }
 }
@@ -284,6 +288,17 @@ impl FtpsHost for ProcessFtpsHost {
         }
 
         Some(String::from_utf8_lossy(&buffer[..read]).into_owned())
+    }
+
+    /// Sleeps the calling thread; the operations that call it run on a blocking
+    /// thread, never on an async worker (rules/rust.md "Async and blocking").
+    fn pause(&self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
+
+    /// Time since this host was created, read from the monotonic clock.
+    fn monotonic_now(&self) -> Duration {
+        self.origin.elapsed()
     }
 
     /// Answers what certificate material is installed for `domain`.
