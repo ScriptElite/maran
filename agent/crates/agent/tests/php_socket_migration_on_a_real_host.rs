@@ -18,8 +18,9 @@
 //!    property of a call that never does anything.
 //!
 //! What this suite CANNOT see, stated rather than implied: the old directory is
-//! created by the test (the agent's own unit no longer names it), a site is
-//! broken by deleting the old socket file the way a cleared `/run` would, and
+//! created by the test (the agent's own unit no longer names it), the old layout
+//! is broken by nothing but the directory's own mode (`/run/maran` is root-owned
+//! and closed to the web user, so nginx cannot reach a socket inside it), and
 //! the stand-in `systemctl` turns a php-fpm reload into SIGUSR2 to the master —
 //! it does not model systemd's `ExecReload=`.
 
@@ -447,29 +448,24 @@ fn a_site_on_the_old_socket_directory_is_served_again_after_a_same_version_updat
     let master = PolygonPhpMaster::start(polygon_distro(), &site.pool_path, "converge");
     PolygonWeb::reload(polygon_distro());
 
-    // The control: laid out the old way, with its old socket, the site works.
-    // Without it the 502 below could be any site that never worked.
+    // The master really listens on the old socket, so the 502 below is about the
+    // directory and not about a master that never started.
     assert!(
         PolygonPhpMaster::poll(SOCKET_BUDGET, || PolygonPhpMaster::accepts_connections(
             &site.socket_under(OLD_DIRECTORY)
         )),
-        "the master must listen on the old socket before the site is broken"
-    );
-    let working = site.fetch_served();
-    assert!(
-        working.starts_with("HTTP/1.1 200 ") && working.contains(SERVED_BODY),
-        "the old layout must serve before the upgrade breaks it:\n{working}"
+        "the master must listen on the old socket before the update"
     );
 
-    // The upgrade's effect: the old socket is gone and nothing listens at the
-    // path the vhost names.
-    std::fs::remove_file(site.socket_under(OLD_DIRECTORY)).expect("the old socket must exist");
+    // The #101 defect itself: /run/maran is root:<service group> 0750, so the web
+    // user cannot traverse it to the socket and nginx answers 502 although the
+    // socket exists and accepts connections.
     let broken = PolygonWeb::fetch_until(site.domain.as_str(), "/", |response| {
         response.starts_with("HTTP/1.1 502 ")
     });
     assert!(
         broken.starts_with("HTTP/1.1 502 "),
-        "a vhost naming a socket nobody listens on must answer 502:\n{broken}"
+        "a vhost naming a socket the web user cannot reach must answer 502:\n{broken}"
     );
 
     forget_reloads();

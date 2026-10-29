@@ -28,8 +28,13 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 pub struct PolygonPhpMaster {
     /// The directory holding its configuration, pid file and log.
     directory: PathBuf,
-    /// The master's process id, read from its own pid file.
-    pid: rustix::process::Pid,
+    /// The master's pid file, which is the only stable name for the master.
+    ///
+    /// A daemonised php-fpm re-executes itself on SIGUSR2 (the reload the agent
+    /// issues) and the new master has a NEW pid (measured: 9037 then 9045), so a
+    /// pid read once at start names a process that has since exited. The file is
+    /// rewritten by each master, so reading it again always names the live one.
+    pid_file: PathBuf,
 }
 
 impl PolygonPhpMaster {
@@ -74,22 +79,16 @@ impl PolygonPhpMaster {
             std::fs::read_to_string(&log_file).unwrap_or_default()
         );
 
-        let mut pid = None;
-        Self::poll(MASTER_BUDGET, || {
-            pid = std::fs::read_to_string(&pid_file)
-                .ok()
-                .and_then(|text| text.trim().parse::<i32>().ok())
-                .and_then(rustix::process::Pid::from_raw);
-            pid.is_some()
-        });
-        let pid = pid.unwrap_or_else(|| {
-            panic!(
-                "php-fpm wrote no pid file within {MASTER_BUDGET:?}; its log:\n{}",
-                std::fs::read_to_string(&log_file).unwrap_or_default()
-            )
-        });
+        assert!(
+            Self::poll(MASTER_BUDGET, || Self::read_pid(&pid_file).is_some()),
+            "php-fpm wrote no pid file within {MASTER_BUDGET:?}; its log:\n{}",
+            std::fs::read_to_string(&log_file).unwrap_or_default()
+        );
 
-        Self { directory, pid }
+        Self {
+            directory,
+            pid_file,
+        }
     }
 
     /// Whether a connection to the unix socket at `socket` is accepted right now.
@@ -97,9 +96,37 @@ impl PolygonPhpMaster {
         UnixStream::connect(socket).is_ok()
     }
 
+    /// The process id the pid file names right now, if it names one.
+    ///
+    /// Read on every call and never cached: a reload makes the master re-execute
+    /// under a new pid, and the file is what follows it.
+    pub fn current_pid(&self) -> Option<rustix::process::Pid> {
+        Self::read_pid(&self.pid_file)
+    }
+
     /// Whether the master is still a live process.
+    ///
+    /// Polls for up to [`MASTER_BUDGET`] on the pid the file names at each look,
+    /// because during a reload the file can briefly name a master that is on its
+    /// way out or not yet written; the answer is `true` as soon as the file's
+    /// pid is a running process.
     pub fn is_alive(&self) -> bool {
-        Path::new(&format!("/proc/{}", self.pid.as_raw_nonzero())).exists()
+        Self::poll(MASTER_BUDGET, || {
+            self.current_pid().is_some_and(Self::is_running)
+        })
+    }
+
+    /// Parses the pid file at `pid_file`, `None` when absent or not a pid.
+    fn read_pid(pid_file: &Path) -> Option<rustix::process::Pid> {
+        std::fs::read_to_string(pid_file)
+            .ok()
+            .and_then(|text| text.trim().parse::<i32>().ok())
+            .and_then(rustix::process::Pid::from_raw)
+    }
+
+    /// Whether `pid` is a running process right now, with no waiting.
+    fn is_running(pid: rustix::process::Pid) -> bool {
+        Path::new(&format!("/proc/{}", pid.as_raw_nonzero())).exists()
     }
 
     /// Runs `condition` until it holds or `budget` passes; says which.
@@ -121,15 +148,21 @@ impl PolygonPhpMaster {
 }
 
 impl Drop for PolygonPhpMaster {
-    /// Stops the master with TERM, waits for it to leave, and removes its directory.
+    /// Stops the master the pid file names NOW with TERM, waits for it to leave,
+    /// and removes its directory.
     ///
+    /// The pid is read at stop time and not remembered from start, because a
+    /// reload replaces the master under a new pid and signalling the old one
+    /// would stop nothing. After [`MASTER_BUDGET`] the same pid gets KILL.
     /// Reported and not panicked, like every other cleanup in the polygon: a
     /// master left behind would answer the next test's reload.
     fn drop(&mut self) {
-        let _ = rustix::process::kill_process(self.pid, rustix::process::Signal::TERM);
-        if !Self::poll(MASTER_BUDGET, || !self.is_alive()) {
-            eprintln!("the polygon php-fpm master {:?} did not stop", self.pid);
-            let _ = rustix::process::kill_process(self.pid, rustix::process::Signal::KILL);
+        if let Some(pid) = self.current_pid() {
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+            if !Self::poll(MASTER_BUDGET, || !Self::is_running(pid)) {
+                eprintln!("the polygon php-fpm master {pid:?} did not stop");
+                let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+            }
         }
         let _ = std::fs::remove_dir_all(&self.directory);
     }
