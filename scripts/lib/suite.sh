@@ -415,7 +415,27 @@ suite_run() {
       (cd "$root/agent" && cargo test --workspace --no-fail-fast) >"$log" 2>&1 || true
       ;;
     backend)
-      (cd "$root/backend" && dotnet test Maran.sln) >"$log" 2>&1 || true
+      # LIGHT, AND VISIBLE, WITHOUT CHANGING WHAT IS MEASURED. The scope is still the whole solution
+      # with no filter; only how the machine is loaded and how the run is watched differ.
+      #
+      #   -m:1 is MSBuild's --max-cpucount. `dotnet test` forwards every switch it does not own to
+      #   MSBuild, and the solution is then built AND tested one project at a time on a single
+      #   node, because the test step is an MSBuild target of each project and MSBuild schedules
+      #   targets of different projects on different nodes only when it has more than one. The
+      #   default is one node per core, so every test project's host was alive at once, which is
+      #   what a small runner cannot carry. `-p:TestTfmsInParallel=false` is deliberately NOT used:
+      #   it serialises the target frameworks of ONE project, and every test project here targets a
+      #   single framework, so it would change nothing.
+      #   -nodeReuse:false stops MSBuild leaving idle worker nodes resident between invocations,
+      #   which would otherwise outlive the run and be counted as load by the next one.
+      #
+      #   The output goes to the log the parsers read AND to stderr, so a job log shows which
+      #   project is running while it runs. `tee` writes the log from the same bytes it forwards,
+      #   so the parsed text is identical to a run that wrote the file alone. stderr rather than
+      #   stdout, so a caller keeping stdout for the verdict still gets the verdict and nothing
+      #   else interleaved with it.
+      echo "harness: backend: dotnet test Maran.sln -m:1 -nodeReuse:false (one project at a time, whole solution)" >&2
+      (cd "$root/backend" && dotnet test Maran.sln -m:1 -nodeReuse:false) 2>&1 | tee "$log" >&2 || true
       ;;
     spa)
       # TWO reporters, and the second one is the one that is scored.

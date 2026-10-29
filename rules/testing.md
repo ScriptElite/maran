@@ -433,7 +433,11 @@ Each row names the workflow that runs it, so this list can be checked against
 
 - `maran test` — **the verdict on the backend and the agent suites** (`backend.yml`, `agent.yml`).
   It runs the whole solution and the whole workspace — neither command can express a subset, because
-  `--filter` and `-p` are refused by the command itself — parses one row per test dll and per cargo
+  `--filter` and `-p` are refused by the command itself. The backend lane runs
+  `dotnet test Maran.sln -m:1 -nodeReuse:false`: one MSBuild node, so one project is built and tested at a
+  time, which keeps a small runner from hosting every test project at once without narrowing what is
+  measured; the dotnet output is copied to the job log (stderr) while the identical bytes go to the log
+  the parsers read, so a lane that dies shows which project it died in. It parses one row per test dll and per cargo
   target, names every failing test, reconciles those names against the totals, and compares both
   against `scripts/test-baseline.txt`. Both lanes pass on the harness's printed `TEST VERDICT: OK`
   line and on nothing else: a run that exits 0 without printing it fails, and a run that prints it
