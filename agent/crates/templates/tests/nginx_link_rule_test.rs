@@ -128,7 +128,7 @@ fn site(shape: Shape, tls: bool) -> String {
         error_log: "/var/log/maran/sites/acme/example.com.error.log",
         document_root: ROOT,
         fpm_socket: match shape {
-            Shape::Php => Some("/run/maran/php/acme-8.3.sock"),
+            Shape::Php => Some("/run/maran-php/acme-8.3.sock"),
             _ => None,
         },
         upstream: match shape {

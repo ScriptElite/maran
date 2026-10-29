@@ -148,7 +148,7 @@ fn a_pool_the_real_php_fpm_rejects_is_refused_by_write_pool_and_leaves_the_previ
     let _planted = PolygonConfigFile::at(&planted);
     std::fs::write(
         &planted,
-        "[maranpolygonplanted]\nlisten = /run/maran/php/planted.sock\n\
+        "[maranpolygonplanted]\nlisten = /run/maran-php/planted.sock\n\
          pm = static\npm.max_children = 1\nuser = maranpolygonnosuchaccount\n",
     )
     .expect("the pool directory must be writable by root");

@@ -239,6 +239,6 @@ ${verdict}"
 
   # Leave the image as it was found: the other assertions that install units remove theirs.
   rm -f "$installed" /etc/systemd/system/maran-api.service /etc/systemd/system/maran-agent.service \
-    /etc/tmpfiles.d/maran-api.conf
+    /etc/tmpfiles.d/maran-api.conf /etc/tmpfiles.d/maran-php.conf
   echo "Step 70 installed ${PHP_INSTALL_UNIT_FILE} as 644 root:root and enabled nothing."
 }
