@@ -81,4 +81,13 @@
   <data name="InvitationLoginNotPending">
     <value>Приглашать некого: у этой учётной записи уже есть пароль.</value>
   </data>
+  <data name="AdminRecoveryUserNotFound">
+    <value>Пользователь с таким адресом электронной почты или именем не найден.</value>
+  </data>
+  <data name="AdminRecoveryNotAdministrator">
+    <value>Этот пользователь не администратор. С консоли можно восстановить доступ только администратору.</value>
+  </data>
+  <data name="AdminRecoveryLoginNotActive">
+    <value>Вход этого администратора не активен (приостановлен или ещё ждёт первого пароля), поэтому восстановить его с консоли нельзя.</value>
+  </data>
 </root>

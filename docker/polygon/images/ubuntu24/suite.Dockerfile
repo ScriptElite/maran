@@ -253,6 +253,14 @@ COPY installer/lib/50-artifacts.sh /tmp/maran-installer/lib/50-artifacts.sh
 # paths it tells an operator to put their own certificate at, and the port in the url it sends
 # them to, were literals no check could see drift in.
 COPY installer/lib/90-finish.sh /tmp/maran-installer/lib/90-finish.sh
+# Step 66, the break-glass `maran` command, and the wrapper and libraries it installs. RUN and READ by
+# docker/polygon/asserts/parts/cli-recovery.sh: the assert script drives the step's own step_cli, then
+# looks at the modes it left, runs the installed wrapper as root and as nobody, and greps its text for
+# the shapes that would make a root script interpret what an operator typed. The step resolves its
+# payload against $SCRIPT_DIR/cli, which the assert script sets to /tmp/maran-installer; the census in
+# parts/uninstaller.sh also reads the step as one of install.sh's run_step lines.
+COPY installer/lib/66-cli.sh /tmp/maran-installer/lib/66-cli.sh
+COPY installer/cli /tmp/maran-installer/cli
 
 # Step 89 and what it needs, all four RUN or READ by the assert script and none of them
 # repeated by this image. The step is the FTPS installer step: it masks the distribution's

@@ -1,13 +1,11 @@
 using System.Globalization;
 using Maran.Modules.Identity.Domain.Entities;
-using Maran.Modules.Identity.Options;
 using Maran.Modules.Identity.Persistence;
 using Maran.Modules.Identity.Resources;
 using Maran.Modules.Identity.Services;
 using Maran.Sdk.Contracts;
 using Maran.SharedKernel.Utilities.Tokens;
 using Microsoft.Extensions.Localization;
-using Microsoft.Extensions.Options;
 using Wolverine;
 
 namespace Maran.Modules.Identity.Commands.RequestPasswordReset;
@@ -72,8 +70,8 @@ public sealed class RequestPasswordResetCommandHandler
     /// <summary>The message text, in the recipient's language.</summary>
     private readonly IStringLocalizer<EmailTemplates> _templates;
 
-    /// <summary>The panel's own public address, for the link in the mail.</summary>
-    private readonly PanelOptions _options;
+    /// <summary>Builds the link in the mail from the panel's own public address.</summary>
+    private readonly PasswordResetLinkBuilder _links;
 
     /// <summary>The panel's clock; the ambient one is a banned API (rules/csharp.md).</summary>
     private readonly IClock _clock;
@@ -83,21 +81,21 @@ public sealed class RequestPasswordResetCommandHandler
     /// <param name="bus">The bus the mail request is published on.</param>
     /// <param name="journal">Records the request.</param>
     /// <param name="templates">The message text, in the recipient's language.</param>
-    /// <param name="options">The panel's own public address.</param>
+    /// <param name="links">Builds the link in the mail from the panel's own public address.</param>
     /// <param name="clock">The panel's clock.</param>
     public RequestPasswordResetCommandHandler(
         IdentityDbContext dbContext,
         IMessageBus bus,
         IdentityAuditJournal journal,
         IStringLocalizer<EmailTemplates> templates,
-        IOptions<PanelOptions> options,
+        PasswordResetLinkBuilder links,
         IClock clock)
     {
         _dbContext = dbContext;
         _bus = bus;
         _journal = journal;
         _templates = templates;
-        _options = options.Value;
+        _links = links;
         _clock = clock;
     }
 
@@ -186,12 +184,9 @@ public sealed class RequestPasswordResetCommandHandler
     /// </remarks>
     private SendMailRequested Compose(string recipient, string token)
     {
-        var instruction = string.IsNullOrWhiteSpace(_options.PanelUrl)
-            ? string.Format(CultureInfo.CurrentCulture, _templates["PasswordResetTokenOnly"], token)
-            : string.Format(
-                CultureInfo.CurrentCulture,
-                _templates["PasswordResetLink"],
-                $"{_options.PanelUrl.TrimEnd('/')}/reset-password?token={Uri.EscapeDataString(token)}");
+        var instruction = _links.HasPublicAddress
+            ? string.Format(CultureInfo.CurrentCulture, _templates["PasswordResetLink"], _links.Build(token))
+            : string.Format(CultureInfo.CurrentCulture, _templates["PasswordResetTokenOnly"], token);
 
         var body = string.Format(CultureInfo.CurrentCulture, _templates["PasswordResetBody"], instruction);
 

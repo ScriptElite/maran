@@ -455,3 +455,77 @@ assert_file_is() {
   [ "$found" = "$expected" ] \
     || fail "${path} is uid:gid:mode ${found}, not ${expected} ($(stat -c '%U:%G' "$path") by name)"
 }
+
+# assert_the_uninstaller_removes_the_break_glass_command: `remove_binaries` takes
+# /usr/local/sbin/maran and /var/lib/maran-cli-staging with it, and this assertion can tell the
+# difference.
+#
+# The census above cannot: it reads the six distribution drop-in directories, and the wrapper lives
+# in /usr/local/sbin while its staging directory lives under /var/lib, so neither is a path it
+# enumerates. A root-only command left on a host that no longer runs the product is a command that
+# mints credentials for an account that no longer exists, and a staging directory left behind can
+# hold the last diagnostics bundle's extracted scan.
+#
+# Proved in both directions, because a promise about a REMOVAL is satisfied by an uninstaller that
+# never had the lines and an assertion that never looked. The inverse control is a copy of the
+# uninstaller with exactly those two `rm` lines deleted (verified to have landed with a count and
+# `cmp`, since a mutation that silently failed to apply is how three mutations here were scored
+# blind): both paths must SURVIVE its remove_binaries, which shows this check can see a survivor.
+#
+# UNOBSERVED HERE: the uninstaller's shell function against files this assertion installed, not an
+# uninstall of a real install. It does not show that remove_binaries is REACHED from main() (the
+# census above and the dangling-include assertion read main's body for the calls that matter, and
+# this one does not), and it removes /usr/local/maran as a tree, which is put back through step 40
+# before it returns.
+assert_the_uninstaller_removes_the_break_glass_command() {
+  local mutant output staging_probe="/var/lib/maran-cli-staging/stage.probe"
+
+  # Installed by the step itself, plus the staging directory the diagnostics verb would have made
+  # (root-owned 0700, as cli_diagnostics creates it) holding one file.
+  run_cli_step >/dev/null \
+    || fail "step 66's step_cli could not install the command this assertion removes"
+  install -d -m 0700 -o root -g root "$(dirname "$staging_probe")"
+  : > "$staging_probe"
+  [ -x "$CLI_WRAPPER_INSTALLED" ] && [ -f "$staging_probe" ] \
+    || fail "the break-glass command and its staging file are not both in place before the uninstaller runs, so their absence afterwards would prove nothing"
+
+  # The inverse control: the two lines deleted from a copy, shown to have landed.
+  mutant="$(mktemp)"
+  sed -e '\|^  rm -f /usr/local/sbin/maran$|d' -e '\|^  rm -rf /var/lib/maran-cli-staging$|d' "$UNINSTALLER" > "$mutant"
+  [ "$(grep -c '^  rm -f /usr/local/sbin/maran$' "$UNINSTALLER")" -eq 1 ] \
+    && [ "$(grep -c '^  rm -rf /var/lib/maran-cli-staging$' "$UNINSTALLER")" -eq 1 ] \
+    || fail "uninstall.sh no longer carries exactly one '  rm -f /usr/local/sbin/maran' line and one '  rm -rf /var/lib/maran-cli-staging' line in the form this assertion mutates; it would be mutating nothing"
+  [ "$(grep -cE 'usr/local/sbin/maran$|maran-cli-staging$' "$mutant")" -eq 0 ] \
+    || fail "the inverse control's copy of the uninstaller still removes the break-glass command, so the survival below would be about a mutation that never applied"
+  if cmp -s "$UNINSTALLER" "$mutant"; then
+    fail "the inverse control's copy of the uninstaller is identical to the original, so the survival below would be about nothing"
+  fi
+  output="$(bash -c 'set -euo pipefail
+. "$1"
+remove_binaries' _ "$mutant" 2>&1)" \
+    || fail "the mutated uninstaller's remove_binaries failed: ${output}"
+  rm -f -- "$mutant"
+  [ -x "$CLI_WRAPPER_INSTALLED" ] && [ -f "$staging_probe" ] \
+    || fail "an uninstaller WITHOUT the two removal lines still removed the wrapper or the staging file, so something else removes them and this assertion cannot attribute the removal below to those lines"
+
+  # Put back what the mutant's rm -rf /usr/local/maran took (the libraries), then the real thing.
+  run_cli_step >/dev/null \
+    || fail "step 66's step_cli could not reinstall the command after the inverse control"
+  output="$(run_uninstaller 'remove_binaries' 2>&1)" \
+    || fail "the real uninstaller's remove_binaries failed: ${output}"
+  for staging_probe in "$CLI_WRAPPER_INSTALLED" /usr/local/maran/cli "$(dirname "$staging_probe")"; do
+    if [ -e "$staging_probe" ] || [ -L "$staging_probe" ]; then
+      fail "the uninstaller left ${staging_probe} behind"
+    fi
+  done
+
+  # remove_binaries took /usr/local/maran as a tree, as it does on a real host; put the layout back
+  # through the installer's own step so nothing that follows depends on it being absent.
+  run_user_step 'create_directory_layout' >/dev/null \
+    || fail "step 40's create_directory_layout could not restore the layout this assertion's deleter removed"
+  [ -d /usr/local/maran ] \
+    || fail "/usr/local/maran is missing after this assertion restored the layout"
+
+  echo "The uninstaller removes /usr/local/sbin/maran, /usr/local/maran/cli and /var/lib/maran-cli-staging — and a copy of it without those two lines leaves both in place, so this check can see a survivor."
+  echo "UNOBSERVED HERE: this is the uninstaller's remove_binaries against files this assertion installed, not an uninstall of a real install. It does not show that main() reaches remove_binaries."
+}

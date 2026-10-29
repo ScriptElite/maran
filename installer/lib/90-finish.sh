@@ -111,6 +111,7 @@ Next steps:
   - Confirm the panel answers:        curl -k https://${hostname}:${MARAN_PANEL_PORT}/health
                                       (-k because of the certificate described above)
   - The full install log is at /var/log/maran/install.log
+  - Locked out?                       sudo /usr/local/sbin/maran admin-reset-password <email>
 
 EOF
 

@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# maran: the break-glass command for the operator who is locked out of the panel.
+#
+# Installed by installer/lib/66-cli.sh as /usr/local/sbin/maran, 0700 root:root, with its helpers
+# in /usr/local/maran/cli/lib. Root only, because it exists for the moment the panel's own login
+# cannot be used; it adds no network surface, no daemon and no port.
+#
+#   maran status
+#   maran admin-reset-password <email|username> [--clear-two-factor] [--allow-non-terminal]
+#   maran collect-diagnostics [--out DIR] [--no-logs]
+#   maran help
+#
+# Nothing the operator types is ever interpreted: the verb is matched against a fixed list, every
+# command is a fixed argv, and typed values are validated and passed as plain words after `--`.
+set -euo pipefail
+
+# The caller's PATH and locale are not trusted: every external command below is looked up in these
+# root-owned directories only (a root shell, or a sudo that keeps PATH, could otherwise shadow
+# `tar` or `systemctl`), and the C locale makes the validation regexes mean what they say.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
+
+# Before anything is read or sourced: a non-root caller gets nothing but this line. 77 is
+# EX_NOPERM.
+if [ "$(id -u)" -ne 0 ]; then
+  echo "maran: must be run as root (try: sudo maran ...)" >&2
+  exit 77
+fi
+
+umask 077
+readonly MARAN_CLI_LIB_DIR="/usr/local/maran/cli/lib"
+
+# shellcheck disable=SC1091
+. "${MARAN_CLI_LIB_DIR}/common.sh"
+# shellcheck disable=SC1091
+. "${MARAN_CLI_LIB_DIR}/status.sh"
+# shellcheck disable=SC1091
+. "${MARAN_CLI_LIB_DIR}/reset.sh"
+# shellcheck disable=SC1091
+. "${MARAN_CLI_LIB_DIR}/diagnostics.sh"
+
+# cli_usage: the help text, on stdout.
+cli_usage() {
+  cat <<'USAGE'
+Usage: maran <command>
+
+  status                                   Service health and the panel's own report.
+  admin-reset-password <email|username>    Print a one-hour password-reset link for an active
+        [--clear-two-factor]               administrator. --clear-two-factor also removes their
+        [--allow-non-terminal]             two-factor enrolment. The link is printed only on a
+                                           terminal unless --allow-non-terminal is given.
+  collect-diagnostics [--out DIR] [--no-logs]
+                                           Write a redacted support bundle (0600 tar.gz).
+  help                                     This text.
+USAGE
+}
+
+main() {
+  local verb="${1:-help}"
+  [ "$#" -eq 0 ] || shift
+  case "$verb" in
+    status) cli_status "$@" ;;
+    admin-reset-password) cli_reset "$@" ;;
+    collect-diagnostics) cli_diagnostics "$@" ;;
+    help|--help|-h) cli_usage ;;
+    *)
+      echo "maran: unknown command" >&2
+      cli_usage >&2
+      return 64
+      ;;
+  esac
+}
+
+main "$@"

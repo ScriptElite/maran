@@ -1,11 +1,13 @@
 using Maran.Agent.Client;
+using Maran.Host.Cli;
+using Maran.Host.Cli.Extensions;
+using Maran.Host.Cli.Models;
 using Maran.Host.Configuration;
 using Maran.Host.Dashboard;
 using Maran.Host.Extensions;
 using Maran.Host.HealthChecks;
 using Maran.Host.Modules;
 using Maran.SharedKernel;
-using Microsoft.EntityFrameworkCore;
 
 namespace Maran.Host;
 
@@ -23,15 +25,17 @@ public sealed class Program
     /// </summary>
     private const string PanelConnectionStringName = "Panel";
 
-    /// <summary>Builds and runs the web host.</summary>
+    /// <summary>Builds and runs the web host, or runs one command-line verb and exits.</summary>
     /// <param name="args">Command-line arguments passed through to <see cref="WebApplication"/>.</param>
-    public static void Main(string[] args)
+    /// <returns>The process exit status: zero for a served host, the verb's own status for a CLI run.</returns>
+    public static int Main(string[] args)
     {
+        var cli = CliInvocationParser.Parse(args);
         var builder = WebApplication.CreateBuilder(args);
         var connectionString = ResolveConnectionString(builder.Configuration);
         PublishConnectionString(builder.Configuration, connectionString);
 
-        builder.Host.AddPanelObservability();
+        builder.Host.AddPanelObservability(cli is not null);
         builder.Host.AddPanelMessaging(connectionString);
 
         builder.Services.AddPanelForwardedHeaders();
@@ -49,25 +53,16 @@ public sealed class Program
         builder.Services.AddPanelBackgroundWork();
         builder.Services.AddPanelSeeding();
         builder.Services.AddLicensingStartupCheck(builder.Configuration);
+        builder.Services.AddPanelCli();
 
         var app = builder.Build();
 
-        // The migration mode, and the ONE place this product applies schema changes.
-        //
-        // rules/architecture.md and scripts/lib/migrations.sh both say migrations are never applied
-        // by a starting process — "the installer and the update command apply them deliberately".
-        // The installer had no way to do that: a server carries the self-contained panel and no .NET
-        // SDK, so `dotnet ef` is not available to it. Nothing applied them, and every fresh install
-        // came up with no module schema at all — the panel served its setup page and answered
-        // `relation "identity.Users" does not exist` to the first thing an operator does (issue #66).
-        //
-        // This keeps the rule and closes the gap: the panel applies migrations only when ASKED to,
-        // by the installer, and exits without serving anything. A normal start still migrates
-        // nothing.
-        if (args.Contains("--migrate", StringComparer.Ordinal))
+        // The command-line mode (`--cli <verb>`, and `--migrate` as its alias): runs one verb against
+        // the composed container and exits without serving anything. `--migrate` is the ONE place
+        // this product applies schema changes — see Cli/Commands/MigrateCliCommand.cs for why.
+        if (cli is not null)
         {
-            MigrateAsync(app.Services).GetAwaiter().GetResult();
-            return;
+            return RunCli(app.Services, cli);
         }
 
         // Before the pipeline serves anything: the panel's listening socket is its trust boundary,
@@ -106,61 +101,18 @@ public sealed class Program
         app.MapControllers();
 
         app.Run();
+        return 0;
     }
 
-    /// <summary>
-    /// Applies every registered module's pending migrations, in one pass, and reports each by name.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The contexts are DISCOVERED from the container rather than listed here, and that is the whole
-    /// point: twelve modules register a <see cref="DbContext"/> today, and a hardcoded list is a
-    /// place to forget the thirteenth. A module that registers a context is migrated by existing.
-    /// </para>
-    /// <para>
-    /// Each context is resolved in its own scope because a <see cref="DbContext"/> is scoped, and
-    /// migrated through the EF API rather than through generated SQL so that the migration history
-    /// table stays the authority on what has been applied.
-    /// </para>
-    /// <para>
-    /// A failure is not swallowed: it propagates, the process exits non-zero, and the installer stops
-    /// on it. An install that could not create the schema must fail where the operator can see it,
-    /// not sixty seconds later as an HTTP 500 with a correlation id.
-    /// </para>
-    /// </remarks>
+    /// <summary>Runs one command-line verb to completion on the process's own streams.</summary>
     /// <param name="services">The built application's service provider.</param>
-    /// <returns>Resolves when every registered context has been migrated.</returns>
-    private static async Task MigrateAsync(IServiceProvider services)
+    /// <param name="invocation">The parsed command line and the process facts.</param>
+    /// <returns>The verb's exit status.</returns>
+    private static int RunCli(IServiceProvider services, CliInvocation invocation)
     {
-        var contextTypes = services.GetServices<DbContextOptions>()
-            .Select(options => { return options.ContextType; })
-            .Distinct()
-            .OrderBy(type => { return type.Name; }, StringComparer.Ordinal)
-            .ToList();
-
-        // A vacuity guard, because "nothing to migrate" and "nothing was found to migrate" look
-        // identical in a log and only one of them is good news (rules/testing.md).
-        if (contextTypes.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "--migrate found no registered DbContext at all, so it would report success having " +
-                "migrated nothing. Refusing rather than leaving an empty schema behind.");
-        }
-
-        foreach (var contextType in contextTypes)
-        {
-            await using var scope = services.CreateAsyncScope();
-            var context = (DbContext)scope.ServiceProvider.GetRequiredService(contextType);
-            var pending = (await context.Database.GetPendingMigrationsAsync().ConfigureAwait(false)).ToList();
-            if (pending.Count == 0)
-            {
-                Console.WriteLine($"{contextType.Name}: up to date.");
-                continue;
-            }
-
-            await context.Database.MigrateAsync().ConfigureAwait(false);
-            Console.WriteLine($"{contextType.Name}: applied {pending.Count} migration(s).");
-        }
+        return services.GetRequiredService<CliRunner>()
+            .RunAsync(invocation, new CliConsole(Console.In, Console.Out, Console.Error), CancellationToken.None)
+            .GetAwaiter().GetResult();
     }
 
     /// <summary>
