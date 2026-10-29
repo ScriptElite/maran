@@ -1,15 +1,13 @@
 //! Ending the transfer sessions a suspended account already has open.
 
 use maran_agent_core::utils::call_class::CallClass;
+use maran_agent_core::utils::pkill_answer::PkillAnswer;
+use maran_agent_core::utils::pkill_uid_arguments::pkill_uid_arguments;
 use maran_agent_core::validation::system::managed_account::ManagedAccount;
 use maran_distro::DistroAdapter;
 
 use crate::logins::logins_error::LoginsError;
 use crate::logins::logins_host::LoginsHost;
-
-/// The flag naming the signal to send, spelled long so it cannot be read as a
-/// pattern.
-const SIGNAL_FLAG: &str = "--signal";
 
 /// The signal itself.
 ///
@@ -22,31 +20,6 @@ const SIGNAL_FLAG: &str = "--signal";
 /// would still have to observe the result through a second `pkill` that cannot
 /// distinguish a live process from a killed one nobody has reaped yet.
 const KILL_SIGNAL: &str = "KILL";
-
-/// The flag that makes `pkill` print how many processes it matched.
-///
-/// This is what keeps the result from being discarded: without it the operation
-/// would know only that `pkill` was content, and "the cull did something" and
-/// "there was nothing to cull" would be the same answer.
-const COUNT_FLAG: &str = "--count";
-
-/// The flag that matches on the REAL uid.
-///
-/// `--uid` and not `--euid`: a session process has dropped to the account
-/// permanently, and the real uid is the one the kernel will not let it change
-/// back. It is also the confinement itself — see the doc comment below.
-const UID_FLAG: &str = "--uid";
-
-/// What `pkill` exits with when it matched at least one process and signalled
-/// it.
-const SIGNALLED: i32 = 0;
-
-/// What `pkill` exits with when nothing matched.
-///
-/// A success for this operation and not a failure: an account with no process
-/// running is the state the cull is trying to reach, and treating "nothing to
-/// do" as an error would fail every suspension of an idle customer.
-const NOTHING_MATCHED: i32 = 1;
 
 /// Sends a fatal signal to every process running as `account`'s uid, and answers
 /// with how many there were.
@@ -134,19 +107,16 @@ pub(crate) fn end_account_sessions(
     distro: &dyn DistroAdapter,
     account: &ManagedAccount,
 ) -> Result<u32, LoginsError> {
-    let uid = account.uid().to_string();
-    // No end-of-options marker: the numeric uid is the argument of `--uid`, so
-    // no operand follows and there is nothing for a marker to protect.
-    let outcome = host.run(
-        &distro.pkill_binary(),
-        &[SIGNAL_FLAG, KILL_SIGNAL, COUNT_FLAG, UID_FLAG, &uid],
-        CallClass::Mutation,
-    )?;
+    // The matcher is `pkill_uid_arguments`, the one spelling shared with account
+    // deletion's process cull; only the signal is this operation's own.
+    let arguments = pkill_uid_arguments(KILL_SIGNAL, account.uid());
+    let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    let outcome = host.run(&distro.pkill_binary(), &arguments, CallClass::Mutation)?;
 
-    match outcome.status {
-        SIGNALLED => Ok(signalled_count(&outcome.stdout)),
-        NOTHING_MATCHED => Ok(0),
-        code => Err(LoginsError::SessionCullFailed { code }),
+    match PkillAnswer::from_status(outcome.status) {
+        PkillAnswer::Matched => Ok(signalled_count(&outcome.stdout)),
+        PkillAnswer::NothingMatched => Ok(0),
+        PkillAnswer::Refused(code) => Err(LoginsError::SessionCullFailed { code }),
     }
 }
 

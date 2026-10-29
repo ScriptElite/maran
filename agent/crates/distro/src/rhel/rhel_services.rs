@@ -249,6 +249,15 @@ pub fn pkill_binary() -> AdapterBinary {
     AdapterBinary::fixed("/usr/bin/pkill")
 }
 
+/// Absolute path of `pgrep`, for the process-execution allow-list.
+///
+/// From the `procps-ng` package, the same one that ships `pkill`, so no extra
+/// dependency is declared for it.
+#[must_use]
+pub fn pgrep_binary() -> AdapterBinary {
+    AdapterBinary::fixed("/usr/bin/pgrep")
+}
+
 /// Absolute path of `passwd`, for the process-execution allow-list.
 ///
 /// The shadow suite installs the user-facing half of its tools in `/usr/bin`

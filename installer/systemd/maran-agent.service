@@ -453,10 +453,14 @@ RestrictSUIDSGID=true
 #   suspension  `pkill --uid` (ops::logins::end_account_sessions) would match nothing and exit 1,
 #               which that module rightly reads as "no session open", so a suspension would be
 #               recorded as complete while the customer's SFTP session kept writing.
-#   deletion    `userdel --remove` refuses a user with live processes (exit 8) only by scanning
-#               /proc, and nothing kills those processes first on the deletion path, so the
-#               account would go while its processes lived on under a uid the next useradd hands
-#               to a different tenant.
+#   deletion    the account's processes must be ended and verified gone by deletion itself
+#               (ops::accounts), because `userdel --remove` is NOT a safety net here: it refuses a
+#               busy user (exit 8) only by stat-ing /proc/<pid>/root, which the kernel gates behind
+#               CAP_SYS_PTRACE for another uid's process. This daemon deliberately lacks that
+#               capability (CapabilityBoundingSet below), so userdel exits 0, the process survives
+#               and the next useradd hands its uid to a different tenant (measured on Ubuntu 24.04
+#               and AlmaLinux 9). That blindness comes from the missing capability, not from
+#               hidepid or ProtectProc.
 # Either is worse than the exposure the directive closes: other users' command lines visible to
 # this daemon. ProcSubset=pid is refused for a plainer reason: it hides /proc/mounts and
 # /proc/net/*, which account creation's quota step and monitor.GetHostMetrics read.

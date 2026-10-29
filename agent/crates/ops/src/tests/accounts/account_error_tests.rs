@@ -115,3 +115,16 @@ fn the_other_failures_of_each_area_still_flatten_into_their_removal_variants() {
         AccountError::DatabaseRemoval { .. }
     ));
 }
+
+/// The survivor refusal names the account and nothing else.
+#[test]
+fn the_processes_remain_message_names_the_account_and_no_process_detail() {
+    let error = AccountError::ProcessesRemain {
+        username: "acme".to_owned(),
+    };
+
+    assert_eq!(
+        error.to_string(),
+        "processes of account 'acme' are still running after being killed"
+    );
+}

@@ -11,6 +11,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use crate::accounts::model::home_metadata::HomeMetadata;
 
@@ -134,6 +135,19 @@ struct RecordingHost {
     /// The program path whose spawn outlives its deadline, so the host answers
     /// with a bound instead of an outcome.
     timing_out: Mutex<Option<String>>,
+
+    /// The exit statuses `pkill` answers with, one per spawn in order, before
+    /// it falls back to `1` ("nothing matched").
+    ///
+    /// Its own queue and not [`RecordingHost::statuses`], for two reasons: the
+    /// default must be 1 and not 0 (0 reads as "processes remain", so every
+    /// existing deletion test would otherwise refuse), and the new spawns must
+    /// not consume the statuses those tests queue for `crontab` and `userdel`.
+    pkill_statuses: Mutex<VecDeque<i32>>,
+
+    /// Every interval the operations asked the host to pause for. Recorded and
+    /// never slept, so a retry loop's bound is a number a test can read.
+    pauses: Mutex<Vec<Duration>>,
 }
 
 impl RecordingHost {
@@ -160,7 +174,27 @@ impl RecordingHost {
             ),
             classes: Mutex::new(Vec::new()),
             timing_out: Mutex::new(None),
+            pkill_statuses: Mutex::new(VecDeque::new()),
+            pauses: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Queues the exit statuses the next `pkill` spawns answer with, in order.
+    /// After the queue is empty `pkill` answers `1`: no process of the uid.
+    fn with_pkill_statuses(self, statuses: &[i32]) -> Self {
+        self.pkill_statuses
+            .lock()
+            .expect("the fixture lock is never poisoned")
+            .extend(statuses.iter().copied());
+        self
+    }
+
+    /// Every interval the operations paused for, in order.
+    fn pauses(&self) -> Vec<Duration> {
+        self.pauses
+            .lock()
+            .expect("the fixture lock is never poisoned")
+            .clone()
     }
 
     /// Makes every spawn of the tool at `program` outlive its deadline.
@@ -374,12 +408,19 @@ impl SystemHost for RecordingHost {
             }));
         }
         let program = program.as_str();
-        let status = self
-            .statuses
-            .lock()
-            .expect("the fixture lock is never poisoned")
-            .pop()
-            .unwrap_or(0);
+        let status = if program.ends_with("pkill") || program.ends_with("pgrep") {
+            self.pkill_statuses
+                .lock()
+                .expect("the fixture lock is never poisoned")
+                .pop_front()
+                .unwrap_or(1)
+        } else {
+            self.statuses
+                .lock()
+                .expect("the fixture lock is never poisoned")
+                .pop()
+                .unwrap_or(0)
+        };
         let stdout = if arguments.contains(&"-p") {
             self.quotaon_stdout
                 .lock()
@@ -487,6 +528,13 @@ impl SystemHost for RecordingHost {
             .expect("the fixture lock is never poisoned")
             .get(path)
             .copied())
+    }
+
+    fn pause(&self, interval: Duration) {
+        self.pauses
+            .lock()
+            .expect("the fixture lock is never poisoned")
+            .push(interval);
     }
 }
 
@@ -1428,6 +1476,8 @@ fn tool_path(operations: &AccountOperations<RecordingHost>, program: &str) -> St
         "crontab" => distro.crontab_binary(),
         "passwd" => distro.passwd_binary(),
         "getent" => distro.getent_binary(),
+        "pkill" => distro.pkill_binary(),
+        "pgrep" => distro.pgrep_binary(),
         other => panic!("the accounts area never runs {other}"),
     }
     .to_string()
@@ -3434,6 +3484,146 @@ fn a_useradd_that_outlives_its_deadline_fails_the_creation_as_a_bound_and_not_as
         .expect_err("a killed useradd fails the creation");
 
     assert!(matches!(error, AccountError::Bound(_)), "{error:?}");
+}
+
+/// The position of the first recorded spawn of `program`.
+fn first_call_of(operations: &AccountOperations<RecordingHost>, program: &str) -> usize {
+    let path = tool_path(operations, program);
+    operations
+        .host()
+        .calls()
+        .iter()
+        .position(|call| call[0] == path)
+        .unwrap_or_else(|| panic!("{program} must have run"))
+}
+
+#[test]
+fn deleting_an_account_kills_its_processes_after_both_crontab_sweeps_and_before_userdel() {
+    // Both halves of the position matter. After the second crontab sweep and the
+    // pool sweep, because those are the steps that can start a process as this
+    // uid (php-fpm workers); before userdel, because userdel cannot see a
+    // foreign uid's process without CAP_SYS_PTRACE and would free the uid under it.
+    let operations = debian(RecordingHost::new().with_user("acme"));
+
+    operations
+        .delete_under_lock(
+            &FakePhpHost::empty(),
+            &no_databases(),
+            &no_sftp(),
+            &no_ftps(),
+            &name(),
+        )
+        .expect("deletion succeeds");
+
+    let calls = operations.host().calls();
+    let pkill_path = tool_path(&operations, "pkill");
+    let crontab_path = tool_path(&operations, "crontab");
+    let last_crontab = calls
+        .iter()
+        .rposition(|call| call[0] == crontab_path)
+        .expect("crontab must have run");
+    assert_eq!(
+        calls.iter().filter(|call| call[0] == crontab_path).count(),
+        2,
+        "the two crontab sweeps"
+    );
+    let first_pkill = first_call_of(&operations, "pkill");
+    assert!(
+        last_crontab < first_pkill,
+        "pkill ran before the last crontab sweep"
+    );
+    assert!(
+        first_pkill < first_call_of(&operations, "userdel"),
+        "pkill must run before userdel"
+    );
+    assert_eq!(
+        calls[first_pkill][1..],
+        ["--signal", "KILL", "--count", "--uid", "1001"],
+        "the uid is the managed account's"
+    );
+    assert!(calls.iter().any(|call| call[0] == pkill_path));
+}
+
+#[test]
+fn a_process_that_survives_every_kill_stops_the_deletion_before_userdel() {
+    // Five rounds of (kill finds one, check finds one).
+    let operations = debian(
+        RecordingHost::new()
+            .with_user("acme")
+            .with_pkill_statuses(&[0; 10]),
+    );
+
+    let error = operations
+        .delete_under_lock(
+            &FakePhpHost::empty(),
+            &no_databases(),
+            &no_sftp(),
+            &no_ftps(),
+            &name(),
+        )
+        .expect_err("a surviving process refuses the deletion");
+
+    assert!(
+        matches!(error, AccountError::ProcessesRemain { ref username } if username == "acme"),
+        "{error:?}"
+    );
+    assert!(
+        operations_calls(&operations, "userdel").is_empty(),
+        "userdel must not run while a process of the uid survives"
+    );
+    assert_eq!(operations.host().pauses().len(), 4);
+}
+
+#[test]
+fn a_deletion_refused_for_a_survivor_completes_when_retried_after_it_has_gone() {
+    let operations = debian(
+        RecordingHost::new()
+            .with_user("acme")
+            .with_pkill_statuses(&[0; 10]),
+    );
+    let attempt = || {
+        operations.delete_under_lock(
+            &FakePhpHost::empty(),
+            &no_databases(),
+            &no_sftp(),
+            &no_ftps(),
+            &name(),
+        )
+    };
+    assert!(matches!(
+        attempt(),
+        Err(AccountError::ProcessesRemain { .. })
+    ));
+
+    // The survivor has exited: the script is exhausted, so pkill answers 1.
+    attempt().expect("the same deletion converges once nothing is left");
+
+    assert_eq!(operations_calls(&operations, "userdel").len(), 1);
+}
+
+#[test]
+fn a_pkill_that_answers_with_an_unknown_status_stops_the_deletion_before_userdel() {
+    let operations = debian(
+        RecordingHost::new()
+            .with_user("acme")
+            .with_pkill_statuses(&[2]),
+    );
+
+    let error = operations
+        .delete_under_lock(
+            &FakePhpHost::empty(),
+            &no_databases(),
+            &no_sftp(),
+            &no_ftps(),
+            &name(),
+        )
+        .expect_err("an unreadable answer is not proof of absence");
+
+    assert!(
+        matches!(error, AccountError::CommandFailed { status: 2, .. }),
+        "{error:?}"
+    );
+    assert!(operations_calls(&operations, "userdel").is_empty());
 }
 
 #[test]

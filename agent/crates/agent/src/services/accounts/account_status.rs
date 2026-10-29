@@ -47,6 +47,13 @@ pub fn to_agent_error(error: &AccountError) -> AgentError {
         | AccountError::DatabaseRemoval { .. }
         | AccountError::SftpRemoval { .. }
         | AccountError::FtpsRemoval { .. } => ErrorCode::SystemFailure,
+        // Processes of the account's uid survived the bounded kill rounds, so the
+        // deletion stopped before `userdel` with the user, its uid and its home
+        // still present. SYSTEM_FAILURE: the panel must report a fault and keep
+        // the account, and the same deletion can be retried once the survivor has
+        // exited. Named ahead of the wildcard so a missing arm cannot compile
+        // silently. The message carries the account name only.
+        AccountError::ProcessesRemain { .. } => ErrorCode::SystemFailure,
         // The name is well formed but the user behind it is not a hosting account
         // (reserved, a system identity, a home elsewhere). INVALID_INPUT: not
         // NOT_FOUND, because the user may exist, and not SYSTEM_FAILURE, because

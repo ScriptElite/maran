@@ -1,5 +1,7 @@
 //! The seam between account operations and the machine they run on.
 
+use std::time::Duration;
+
 use maran_agent_core::utils::call_class::CallClass;
 use maran_distro::AdapterBinary;
 
@@ -100,4 +102,17 @@ pub trait SystemHost: Send + Sync {
     /// Returns [`AccountError::HomeInspection`] when the path exists but its
     /// metadata could not be read for any other reason.
     fn home_metadata(&self, path: &str) -> Result<Option<HomeMetadata>, AccountError>;
+
+    /// Waits for `interval` before the caller looks again.
+    ///
+    /// The only way the account operations spend wall-clock time, and a trait
+    /// method rather than a call to `std::thread::sleep` so that time is
+    /// injected like every other effect (rules/testing.md "Determinism": no
+    /// sleeps, inject the clock). The real host sleeps; a test fake records the
+    /// interval and returns at once, which makes the bound of a retry loop a
+    /// number a test can read instead of a duration it has to wait out.
+    ///
+    /// Called from inside the blocking section of an rpc, never from an async
+    /// worker.
+    fn pause(&self, interval: Duration);
 }

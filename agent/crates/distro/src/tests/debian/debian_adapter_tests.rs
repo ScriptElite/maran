@@ -111,10 +111,11 @@ fn the_debian_family_reports_exactly_the_four_units_the_panel_manages() {
 /// `sh` is in the table for the same reason and not because the agent spawns it
 /// — it never does — but because the path is written into a crontab line, where
 /// a wrong one is a cron entry that silently never runs.
-const EXPECTED_BINARIES: [(&str, &str); 18] = [
+const EXPECTED_BINARIES: [(&str, &str); 19] = [
     ("useradd", "/usr/sbin/useradd"),
     ("usermod", "/usr/sbin/usermod"),
     ("pkill", "/usr/bin/pkill"),
+    ("pgrep", "/usr/bin/pgrep"),
     ("userdel", "/usr/sbin/userdel"),
     ("chpasswd", "/usr/sbin/chpasswd"),
     ("setquota", "/usr/sbin/setquota"),
@@ -133,11 +134,12 @@ const EXPECTED_BINARIES: [(&str, &str); 18] = [
 ];
 
 /// The adapter's answer for each tool, in the order of [`EXPECTED_BINARIES`].
-fn actual_binaries() -> [String; 18] {
+fn actual_binaries() -> [String; 19] {
     [
         DebianAdapter.useradd_binary().to_string(),
         DebianAdapter.usermod_binary().to_string(),
         DebianAdapter.pkill_binary().to_string(),
+        DebianAdapter.pgrep_binary().to_string(),
         DebianAdapter.userdel_binary().to_string(),
         DebianAdapter.chpasswd_binary().to_string(),
         DebianAdapter.setquota_binary().to_string(),
@@ -210,7 +212,7 @@ fn declared_binary_methods() -> usize {
 
 /// Every program the Debian adapter lets the agent execute, with the method that names it.
 ///
-/// One entry per `AdapterBinary`-returning method of the trait (23 fixed paths
+/// One entry per `AdapterBinary`-returning method of the trait (24 fixed paths
 /// plus the version-built php-fpm validator). `sh` and the login shell are not
 /// here: they are written somewhere, never executed by the agent, so they stay
 /// plain strings (see the type assertion below).
@@ -230,6 +232,7 @@ fn every_executable() -> Vec<(&'static str, AdapterBinary)> {
         ("userdel", DebianAdapter.userdel_binary()),
         ("usermod", DebianAdapter.usermod_binary()),
         ("pkill", DebianAdapter.pkill_binary()),
+        ("pgrep", DebianAdapter.pgrep_binary()),
         ("passwd", DebianAdapter.passwd_binary()),
         ("getent", DebianAdapter.getent_binary()),
         ("setquota", DebianAdapter.setquota_binary()),

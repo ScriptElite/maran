@@ -1,6 +1,8 @@
 # Committed per-target test baseline. Recorded by 'maran test --accept'; commit the diff.
 # stack<TAB>target<TAB>passed<TAB>failed<TAB>ignored
 #
+# RE-MEASURED 2026-10-29 (issue #103, account processes ended before userdel): account_deletion_on_a_real_host
+# 5->6 ignored (new real-host test; all 6 passed on the polygon of PR #123). Unit rows left to CI.
 # RE-MEASURED 2026-10-28 (issue #90, every spawned root process bounded, rebased on dev ac9a5b5): rust 33 targets,
 # 2661 passed / 0 failed / 147 ignored. NEW targets: bound_errors, bound_is_mapped_in_every_status_file,
 # safe_write_bound_on_real_processes. Rows moved: maran_agent 372->410, backup_on_a_real_host 0->0, binary_paths_on_a_real_host 0->0, bound_is_mapped_in_every_status_file new->4, php_install_rpc 6->7, sites_on_a_real_host 0->0, maran_agent_core 424->486, maran_distro 42->57, maran_ops 1348->1624, bound_errors new->9, safe_write_bound_on_real_processes new->6, doc-tests 0->1, doc-tests 0->1.
@@ -272,7 +274,7 @@
 # re-measurement note in it is one --accept away from being lost. Worth fixing in the script.
 rust	maran_agent [unittests src/lib.rs]	410	0	0
 rust	maran_agent [unittests src/main.rs]	0	0	0
-rust	account_deletion_on_a_real_host [tests/account_deletion_on_a_real_host.rs]	0	0	5
+rust	account_deletion_on_a_real_host [tests/account_deletion_on_a_real_host.rs]	0	0	6
 rust	account_identity_on_a_real_host [tests/account_identity_on_a_real_host.rs]	0	0	6
 rust	backup_on_a_real_host [tests/backup_on_a_real_host.rs]	0	0	13
 rust	binary_paths_on_a_real_host [tests/binary_paths_on_a_real_host.rs]	0	0	4
