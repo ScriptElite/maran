@@ -2,6 +2,7 @@ using Maran.Host.BackgroundServices;
 using Maran.Modules.Backups.Services;
 using Maran.Modules.Firewall.Services;
 using Maran.Modules.Monitoring.Services;
+using Maran.Modules.Sites.Services;
 using Maran.Modules.Tasks.Services;
 
 namespace Maran.Host.Extensions;
@@ -74,6 +75,13 @@ public static class BackgroundWorkExtensions
         // class would exist, the doc comments would describe a reclamation, and no backup would
         // ever be reclaimed.
         services.AddHostedService<StartupBackupReconciler>();
+
+        // A one-off for the layout a site was written in: the agent moved the PHP-FPM sockets to a
+        // new directory, and a pool and vhost rendered by an older agent still name the old one, so
+        // the site answers 502 until something re-renders it. The Sites module owns the PASS — it
+        // reads its own rows and asks its own agent client — and this owns the fact that it runs at
+        // every start, because the panel records nothing about which site was converged.
+        services.AddHostedService<StartupPhpSiteReconciler>();
 
         return services;
     }

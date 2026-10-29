@@ -14,7 +14,7 @@
 A search of the base spec for целостн / подмен / модифиц / tamper / integrity returns nothing: no
 version of the design has ever mentioned runtime verification that the panel's own installed files
 match what was released. This addendum fills that gap for v1, at the owner's direction, in the
-aaPanel model: detect that files on a customer's server differ from the exact release version that
+open-core model: detect that files on a customer's server differ from the exact release version that
 shipped them.
 
 Three decisions below are the owner's and are recorded here, not re-argued:

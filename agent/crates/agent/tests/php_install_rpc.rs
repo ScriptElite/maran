@@ -183,6 +183,10 @@ impl PhpHost for FakeHost {
             .any(|directory| Path::new(directory) == path)
     }
 
+    fn read_config(&self, _path: &Path) -> Option<String> {
+        None
+    }
+
     fn create_directory(&self, _path: &Path, _mode: u32) -> Result<(), PhpOpError> {
         Err(PhpOpError::ConfigWrite {
             reason: "an install writes no directory".to_owned(),

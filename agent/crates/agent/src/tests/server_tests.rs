@@ -322,6 +322,11 @@ impl PhpHost for FakePoolHost {
             .any(|version| shown.contains(version.as_str()))
     }
 
+    /// Never reached: the startup pass reads no pool.
+    fn read_config(&self, _path: &Path) -> Option<String> {
+        unreachable!("the startup pool pass reads no pool file")
+    }
+
     /// Never reached: the startup pass creates nothing.
     fn create_directory(&self, _path: &Path, _mode: u32) -> Result<(), PhpOpError> {
         unreachable!("the startup pool pass creates no directory")

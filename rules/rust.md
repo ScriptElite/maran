@@ -272,7 +272,8 @@ agent/
     │       │                  one folder per area; anatomy below. `ftp/` is NOT
     │       │                  one of them: it is a zero-byte skeleton left from
     │       │                  before the protocol was chosen, and the shipped
-    │       │                  FTP is FTPS over vsftpd in `ftps/`. `logins/` is
+    │       │                  FTP is FTPS over vsftpd in `ftps/`. `sites/converge_php_site.rs` and
+    │       │                  `php/render_pool.rs` are the PHP convergence pair. `logins/` is
     │       │                  not a proto service either — it is what the two
     │       │                  login protocols share, so the systemd
     │       │                  path-escaping rule is stated once instead of once
@@ -551,6 +552,8 @@ ops/src/sites/
 ├── sites_op_error.rs       one error enum for the whole area
 ├── create_site.rs          one rpc = one file = one `pub async fn`
 ├── update_site_php_version.rs
+├── converge_php_site.rs    not an rpc: brings one PHP site's pool, then its
+│                           vhost, to the current render, writing only what differs
 ├── enable_site.rs
 ├── disable_site.rs
 ├── delete_site.rs

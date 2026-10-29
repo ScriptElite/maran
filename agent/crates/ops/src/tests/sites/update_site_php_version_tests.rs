@@ -118,13 +118,27 @@ fn a_version_that_is_not_installed_is_refused_rather_than_installed() {
 }
 
 #[test]
-fn setting_the_version_a_site_already_has_changes_nothing() {
+fn setting_the_version_a_site_already_has_changes_nothing_when_it_is_current() {
     // The panel retries after a timeout, and a reload of nginx AND of php-fpm
-    // per retry is a storm on a busy host.
+    // per retry is a storm on a busy host. "Current" is decided by comparing
+    // today's render with the files, so the pool must exist for the call to be
+    // a no-op.
     let site_host = FakeSiteHost::passing();
     let php_host = FakePhpHost::with_installed(&["8.3"]);
     let site = php_input();
     create_test_site(&site_host, &site).unwrap();
+    write_pool(
+        &php_host,
+        distro(),
+        &crate::php::model::pool_input::PoolInput {
+            account: site.account.clone(),
+            version: PhpVersion::parse("8.3").unwrap(),
+            max_children: WORKERS,
+            overrides: Vec::new(),
+        },
+    )
+    .unwrap();
+    let pool_writes = php_host.writes();
 
     update_site_php_version(
         &site_host,
@@ -141,7 +155,51 @@ fn setting_the_version_a_site_already_has_changes_nothing() {
     .unwrap();
 
     assert_eq!(site_host.writes(), 1);
-    assert_eq!(php_host.writes(), 0);
+    assert_eq!(php_host.writes(), pool_writes);
+}
+
+#[test]
+fn setting_the_version_a_site_already_has_repairs_a_pool_and_vhost_left_on_the_old_socket_path() {
+    // A site an earlier release wrote names a socket directory this release no
+    // longer uses. The same-version call used to return before looking, so
+    // nothing ever moved it; it now converges both files.
+    let site_host = FakeSiteHost::passing();
+    let php_host = FakePhpHost::with_installed(&["8.3"]);
+    let site = php_input();
+    create_test_site(&site_host, &site).unwrap();
+    let vhost_path = SitePaths::for_site(&site.account, &site.domain).config_path;
+    let current_vhost = site_host.config(&vhost_path).unwrap();
+    let aged_vhost = current_vhost.replace(
+        maran_agent_core::agent_paths::AgentPaths::PHP_FPM_SOCKET_DIRECTORY,
+        "/run/php",
+    );
+    assert_ne!(
+        aged_vhost, current_vhost,
+        "the vhost never named the directory"
+    );
+    site_host.place_config(&vhost_path, &aged_vhost);
+
+    update_site_php_version(
+        &site_host,
+        &php_host,
+        distro(),
+        &site,
+        &PhpSwitch {
+            version: &PhpVersion::parse("8.3").unwrap(),
+            max_children: WORKERS,
+            overrides: &[],
+            remove_previous_pool: false,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(site_host.config(&vhost_path).unwrap(), current_vhost);
+    assert!(
+        php_host
+            .config(std::path::Path::new(&pool_of(&site, "8.3")))
+            .is_some(),
+        "the pool the vhost points at must be written"
+    );
 }
 
 #[test]

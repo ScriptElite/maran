@@ -102,8 +102,8 @@ an RPC is found without searching.
 | Path | Purpose |
 |---|---|
 | `src/accounts/` | system users: useradd/userdel, homes, quotas, usage. |
-| `src/sites/` | nginx vhosts: create, enable/disable, delete, php version, log tail, reload. |
-| `src/php/` | pools and versions. No proto service of its own — driven by sites and accounts. |
+| `src/sites/` | nginx vhosts: create, enable/disable, delete, php version, log tail, reload. `converge_php_site.rs` is not an rpc: it brings one PHP site's pool and then its vhost to the current render, writing only what differs (a same-version `UpdateSitePhpVersion` runs it). |
+| `src/php/` | pools and versions. No proto service of its own — driven by sites and accounts. `render_pool.rs` renders a pool's configuration, shared by pool writes and `sites/converge_php_site.rs`. |
 | `src/db/` | MySQL/MariaDB databases and the dedicated user each one is created with. The agent holds no database credential: it connects over the local socket as root, authenticated by the connecting uid. |
 | `src/files/` | customer file operations. Every one goes through `resolve_in_home` and runs under the account's uid. |
 | `src/sftp/` | OpenSSH SFTP logins, each chrooted into a per-account root-owned jail with the account's real home bind-mounted inside. `model/account_jail.rs` derives every jail path AND the systemd mount unit's escaped name from one `AccountName`. The login is created with the ACCOUNT's own uid and gid (`model/account_ownership.rs`): a home of `<account>:<web server group> 0750` gives a separate identity nothing at all. |

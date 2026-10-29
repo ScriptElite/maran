@@ -123,7 +123,7 @@ asserted, not argued.
 Covers the manifest over shipped files.
 
 **Weakest claim, and it is a structural one:** this panel is published under BSL 1.1, source
-available to everyone and modifiable. CWP can hide its PHP because CWP does not publish it.
+available to everyone and modifiable. A closed panel can hide its code because it does not publish it.
 Integrity detection here tells an OPERATOR that files changed; it cannot stop a determined
 party who has the source. The note says this. A reviewer should confirm the note does not, in
 any passage, let the reader infer more protection than that.

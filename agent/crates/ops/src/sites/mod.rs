@@ -12,6 +12,7 @@
 //! `crate::safe_write`, and a path inside `/home/<account>/` is touched only by
 //! a process that has dropped to that account (rules/security.md).
 
+pub(crate) mod converge_php_site;
 mod create_site;
 mod create_vhost;
 // The site tests' in-memory host and inputs, declared ONCE here rather than in

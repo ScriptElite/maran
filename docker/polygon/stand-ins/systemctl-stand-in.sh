@@ -14,6 +14,11 @@
 #   reload <service>        RECORDS the request under /run/polygon-units, then
 #                           becomes `nginx -s reload` when an nginx master is
 #                           actually running, and succeeds silently when none is.
+#   reload php*-fpm         the same recording, then SIGUSR2 to the php-fpm master
+#                           when one is running (what `systemctl reload` of a
+#                           php-fpm unit does: re-read the configuration and
+#                           re-bind every pool's listener), and success when
+#                           none is. See reload_php_fpm below.
 #   enable --now <x>.mount  performs the bind mount the unit describes, AFTER
 #                           checking the unit the way systemd checks it.
 #   disable --now <x>.mount unmounts it again, which the account-deletion
@@ -403,6 +408,25 @@ show_unit() {
     exit 0
 }
 
+# reload_php_fpm: the `reload php*-fpm` arm. Never returns.
+#
+# A php-fpm unit's reload is SIGUSR2 to its master, which re-reads the global
+# configuration and every pool file and re-binds each pool's listener. The master
+# is found by the title php-fpm gives it (`php-fpm: master process (<config>)`),
+# because the pid file's location differs per family and per configuration; the
+# unit name is only used to decide that this IS a php-fpm reload, never put in a
+# command. When no master runs the reload succeeds silently, like the nginx arm:
+# the polygon's tests start their own master and a write before it exists must not
+# fail. The first master is signalled; the suites run one at a time and start one.
+reload_php_fpm() {
+    command -v pgrep >/dev/null 2>&1 || fail "pgrep is not installed; cannot find the php-fpm master"
+    master="$(pgrep -f '^php-fpm: master process' | head -1 || true)"
+    case "$master" in
+        '' | *[!0-9]*) exit 0 ;;
+    esac
+    exec kill -USR2 "$master"
+}
+
 # The verb, taken off the front so every arm below sees only its own arguments.
 verb="${1:-}"
 if [ "$#" -gt 0 ]; then
@@ -538,6 +562,9 @@ case "$verb" in
         unit="$(unit_from "$@")"
         require_unit_name "$unit"
         record_reload "$unit"
+        case "$unit" in
+            php*-fpm | php*-php-fpm) reload_php_fpm ;;
+        esac
         ;;
     *) exit 0 ;;
 esac

@@ -124,8 +124,8 @@ is also the PR-gate polygon target (`README.md`/spec reference to "PR — Ubuntu
 - Ports free: whatever `MARAN_PANEL_PORT` is set to in `installer/install.sh:87` — **8443** — and
   no other port check exists in preflight (`installer/lib/10-preflight.sh:25-27`: PostgreSQL is
   unix-socket only and deliberately excluded).
-- No conflicting panel footprint: `/usr/local/cpanel`, `/usr/local/directadmin`, `/usr/local/psa`,
-  `/etc/webmin`, `/usr/local/lsws` must all be absent (`installer/lib/10-preflight.sh:195-205`) —
+- No conflicting panel footprint: none of the other-panel install directories that
+  `installer/lib/10-preflight.sh` (`check_no_conflicting_panel`) looks for may exist —
   true by construction on a fresh disposable VPS.
 
 ### 1.4 DNS that must already be true

@@ -23,9 +23,14 @@ service SitesService {
   rpc CreateSite(CreateSiteRequest) returns (CreateSiteResponse);
 
   // Switches a PHP-backed site to a different installed PHP version and
-  // reloads its PHP-FPM pool. Idempotent: setting the same version twice
-  // is a no-op success. Fails VALIDATION_FAILED if the version is not
-  // installed on this host.
+  // reloads its PHP-FPM pool. Idempotent: setting the version the site
+  // already has CONVERGES it instead of returning early - the pool and the
+  // vhost are rendered and compared with the files on disk, and only a file
+  // that differs is rewritten (pool first, vhost unless the site is
+  // suspended). A site that is already current is a success that writes and
+  // reloads nothing; a site written by an earlier release (a socket path this
+  // release no longer uses) is brought to the current one by the same call.
+  // Fails VALIDATION_FAILED if the version is not installed on this host.
   rpc UpdateSitePhpVersion(UpdateSitePhpVersionRequest) returns (UpdateSitePhpVersionResponse);
 
   // Enables a previously disabled site (restores normal serving).

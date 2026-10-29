@@ -305,6 +305,7 @@ jobs:
               --test privileges_on_a_real_host --test databases_on_a_real_host \
               --test monitor_on_a_real_host --test binary_paths_on_a_real_host \
               --test restore_recovery_on_a_real_host \
+              --test php_socket_migration_on_a_real_host \
               --no-fail-fast \
               -- --ignored --test-threads=1 2>&1 |
             tee -a "$RUNNER_TEMP/polygon-logs/step-1.log" || status=$?

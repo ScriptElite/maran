@@ -28,6 +28,7 @@ mod process_php_host;
 mod reload_pool_trees;
 mod remove_account_pools;
 mod remove_pool;
+pub(crate) mod render_pool;
 mod supported_versions;
 pub(crate) mod write_pool;
 
