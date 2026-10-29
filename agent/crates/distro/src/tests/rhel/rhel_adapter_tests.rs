@@ -111,10 +111,11 @@ fn the_rhel_family_reports_exactly_the_four_units_the_panel_manages() {
 /// `sh` is in the table for the same reason and not because the agent spawns it
 /// — it never does — but because the path is written into a crontab line, where
 /// a wrong one is a cron entry that silently never runs.
-const EXPECTED_BINARIES: [(&str, &str); 18] = [
+const EXPECTED_BINARIES: [(&str, &str); 19] = [
     ("useradd", "/usr/sbin/useradd"),
     ("usermod", "/usr/sbin/usermod"),
     ("pkill", "/usr/bin/pkill"),
+    ("pgrep", "/usr/bin/pgrep"),
     ("userdel", "/usr/sbin/userdel"),
     ("chpasswd", "/usr/sbin/chpasswd"),
     ("setquota", "/usr/sbin/setquota"),
@@ -133,11 +134,12 @@ const EXPECTED_BINARIES: [(&str, &str); 18] = [
 ];
 
 /// The adapter's answer for each tool, in the order of [`EXPECTED_BINARIES`].
-fn actual_binaries() -> [String; 18] {
+fn actual_binaries() -> [String; 19] {
     [
         RhelAdapter.useradd_binary().to_string(),
         RhelAdapter.usermod_binary().to_string(),
         RhelAdapter.pkill_binary().to_string(),
+        RhelAdapter.pgrep_binary().to_string(),
         RhelAdapter.userdel_binary().to_string(),
         RhelAdapter.chpasswd_binary().to_string(),
         RhelAdapter.setquota_binary().to_string(),
@@ -210,7 +212,7 @@ fn declared_binary_methods() -> usize {
 
 /// Every program the RHEL adapter lets the agent execute, with the method that names it.
 ///
-/// One entry per `AdapterBinary`-returning method of the trait (23 fixed paths
+/// One entry per `AdapterBinary`-returning method of the trait (24 fixed paths
 /// plus the version-built php-fpm validator). `sh` and the login shell are not
 /// here: they are written somewhere, never executed by the agent, so they stay
 /// plain strings (see the type assertion below).
@@ -230,6 +232,7 @@ fn every_executable() -> Vec<(&'static str, AdapterBinary)> {
         ("userdel", RhelAdapter.userdel_binary()),
         ("usermod", RhelAdapter.usermod_binary()),
         ("pkill", RhelAdapter.pkill_binary()),
+        ("pgrep", RhelAdapter.pgrep_binary()),
         ("passwd", RhelAdapter.passwd_binary()),
         ("getent", RhelAdapter.getent_binary()),
         ("setquota", RhelAdapter.setquota_binary()),

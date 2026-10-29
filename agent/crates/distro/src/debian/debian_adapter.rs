@@ -134,6 +134,10 @@ impl DistroAdapter for DebianAdapter {
         debian_services::pkill_binary()
     }
 
+    fn pgrep_binary(&self) -> AdapterBinary {
+        debian_services::pgrep_binary()
+    }
+
     fn passwd_binary(&self) -> AdapterBinary {
         debian_services::passwd_binary()
     }

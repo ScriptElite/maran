@@ -128,6 +128,7 @@ fn declared_binaries(distro: &'static dyn DistroAdapter) -> Vec<(&'static str, S
         ("userdel_binary", distro.userdel_binary().to_string()),
         ("usermod_binary", distro.usermod_binary().to_string()),
         ("pkill_binary", distro.pkill_binary().to_string()),
+        ("pgrep_binary", distro.pgrep_binary().to_string()),
         ("setquota_binary", distro.setquota_binary().to_string()),
         ("quota_binary", distro.quota_binary().to_string()),
         ("quotaon_binary", distro.quotaon_binary().to_string()),

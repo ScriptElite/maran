@@ -408,7 +408,7 @@ impl SystemHost for RecordingHost {
             }));
         }
         let program = program.as_str();
-        let status = if program.ends_with("pkill") {
+        let status = if program.ends_with("pkill") || program.ends_with("pgrep") {
             self.pkill_statuses
                 .lock()
                 .expect("the fixture lock is never poisoned")
@@ -1477,6 +1477,7 @@ fn tool_path(operations: &AccountOperations<RecordingHost>, program: &str) -> St
         "passwd" => distro.passwd_binary(),
         "getent" => distro.getent_binary(),
         "pkill" => distro.pkill_binary(),
+        "pgrep" => distro.pgrep_binary(),
         other => panic!("the accounts area never runs {other}"),
     }
     .to_string()

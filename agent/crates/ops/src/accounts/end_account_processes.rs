@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use maran_agent_core::utils::call_class::CallClass;
+use maran_agent_core::utils::pgrep_live_uid_arguments::pgrep_live_uid_arguments;
 use maran_agent_core::utils::pkill_answer::PkillAnswer;
 use maran_agent_core::utils::pkill_uid_arguments::pkill_uid_arguments;
 use maran_agent_core::validation::system::managed_account::ManagedAccount;
@@ -36,10 +37,6 @@ const PAUSE: Duration = Duration::from_millis(200);
 /// this operation exists to prevent.
 const KILL_SIGNAL: &str = "KILL";
 
-/// The signal that is never delivered and only reports whether a process of the
-/// uid exists.
-const PROBE_SIGNAL: &str = "0";
-
 /// Kills every process running as `account`'s uid and verifies that none is
 /// left, so that `userdel` frees a uid nothing is still using.
 ///
@@ -55,9 +52,9 @@ const PROBE_SIGNAL: &str = "0";
 /// # How
 ///
 /// Up to five rounds of: `pkill --signal KILL --count --uid <uid>`, then
-/// `pkill --signal 0 --count --uid <uid>` as the check. The check uses the same
-/// matcher as the kill, so the two cannot disagree about which processes count.
-/// A round that finds survivors waits through [`SystemHost::pause`] and kills
+/// `pgrep --count --runstates D,R,S,T,t,W,X,I,P --uid <uid>` as the check. Both
+/// match on the real uid; the check lists every process state except zombie, so
+/// it counts exactly the processes a signal can still end. A round that finds survivors waits through [`SystemHost::pause`] and kills
 /// again; the kill is repeated rather than only the check, because a process
 /// forked just before the previous pass is only visible to the next one.
 ///
@@ -67,7 +64,7 @@ const PROBE_SIGNAL: &str = "0";
 /// and the type refuses uid 0, any id below the distro's floor and any home other
 /// than the one this agent gives a hosting account — so a system user's processes
 /// cannot be named here (the same argument as `logins::end_account_sessions`).
-/// The program is `distro.pkill_binary()`, every other argument is a constant or
+/// The programs are `distro.pkill_binary()` and `distro.pgrep_binary()`, every other argument is a constant or
 /// the uid rendered with `Display`, and the host spawns an argv array: no shell,
 /// nothing of the request in the command line (rules/security.md items 3 and 12).
 ///
@@ -79,21 +76,29 @@ const PROBE_SIGNAL: &str = "0";
 ///
 /// # What it cannot see
 ///
-/// `pkill` reads `/proc`; on a host mounted with `hidepid` a process of another
-/// uid is invisible to it, so both the kill and the check are blind in the same
-/// direction. Zombies count as survivors until reaped, and a process in
-/// uninterruptible sleep cannot be killed: both end in
-/// [`AccountError::ProcessesRemain`], the safe direction.
+/// `pkill` and `pgrep` read `/proc`; on a host mounted with `hidepid` a process
+/// of another uid is invisible to them, so both the kill and the check are blind
+/// in the same direction. A process in uninterruptible sleep cannot be killed and
+/// ends in [`AccountError::ProcessesRemain`], the safe direction.
+///
+/// # Why a zombie does not count
+///
+/// The check ignores zombies. A zombie has exited: it holds no memory, no file
+/// descriptor and no credential, runs nothing and cannot be signalled to any
+/// effect, so a reused uid inherits nothing from it. Counting it (as
+/// `pkill --signal 0` does) would refuse the deletion for as long as a parent
+/// that does not reap stays alive, which on a host without a reaping init
+/// (a container whose PID 1 is not an init) is every killed orphan, forever.
 ///
 /// # Errors
 ///
-/// - [`AccountError::CommandUnavailable`] when `pkill` could not be started.
-/// - [`AccountError::Bound`] when a `pkill` outran its deadline.
-/// - [`AccountError::CommandFailed`] when a `pkill` exited with anything but
+/// - [`AccountError::CommandUnavailable`] when `pkill` or `pgrep` could not be started.
+/// - [`AccountError::Bound`] when a `pkill` or `pgrep` outran its deadline.
+/// - [`AccountError::CommandFailed`] when a `pkill` or `pgrep` exited with anything but
 ///   "matched" (0) or "nothing matched" (1). Whether anything was signalled is
 ///   then unknown, so it is never read as "no processes".
 /// - [`AccountError::ProcessesRemain`] when the last round's check still found a
-///   process. Nothing has been deleted at that point.
+///   live process. Nothing has been deleted at that point.
 pub(crate) fn end_account_processes(
     host: &dyn SystemHost,
     distro: &dyn DistroAdapter,
@@ -102,7 +107,8 @@ pub(crate) fn end_account_processes(
     let pkill = distro.pkill_binary();
     let kill = pkill_uid_arguments(KILL_SIGNAL, account.uid());
     let kill: Vec<&str> = kill.iter().map(String::as_str).collect();
-    let probe = pkill_uid_arguments(PROBE_SIGNAL, account.uid());
+    let pgrep = distro.pgrep_binary();
+    let probe = pgrep_live_uid_arguments(account.uid());
     let probe: Vec<&str> = probe.iter().map(String::as_str).collect();
 
     for round in 1..=ROUNDS {
@@ -111,11 +117,11 @@ pub(crate) fn end_account_processes(
             return Err(AccountError::command_failed(pkill.as_str(), &killed));
         }
 
-        let checked = host.run(&pkill, &probe, CallClass::Mutation)?;
+        let checked = host.run(&pgrep, &probe, CallClass::Mutation)?;
         match PkillAnswer::from_status(checked.status) {
             PkillAnswer::NothingMatched => return Ok(()),
             PkillAnswer::Refused(_) => {
-                return Err(AccountError::command_failed(pkill.as_str(), &checked));
+                return Err(AccountError::command_failed(pgrep.as_str(), &checked));
             }
             PkillAnswer::Matched => {
                 if round < ROUNDS {

@@ -1223,10 +1223,13 @@ fn holds_ptrace_capability() -> bool {
 
 /// Starts one detached `sleep` running as `account`'s uid and gid.
 ///
-/// `setsid --fork` makes the sleeper a child of init rather than of this test,
-/// so once killed it is reaped there and cannot linger as a zombie that the
-/// check for survivors would count. The wrapper process that is waited on here
-/// exits immediately.
+/// `setsid --fork` makes the sleeper an orphan, reparented to the container's
+/// PID 1 rather than left a child of this test. Whether a killed orphan is then
+/// reaped depends on that PID 1: the polygon runs its container with `--init`,
+/// so it is, but a PID 1 that never `wait()`s (a bare `cargo test`) would leave
+/// it a zombie. The check for survivors ignores zombies in production for the
+/// same reason (they hold nothing), so this test does not depend on reaping
+/// either way. The wrapper process that is waited on here exits immediately.
 fn plant_process(account: &PolygonAccount) {
     let status = Command::new("setpriv")
         .arg(format!("--reuid={}", account.ids().uid()))

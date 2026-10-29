@@ -28,6 +28,7 @@ pub mod child_output;
 pub mod current_uid;
 pub mod directory;
 pub mod output_stream;
+pub mod pgrep_live_uid_arguments;
 pub mod pkill_answer;
 pub mod pkill_uid_arguments;
 pub mod run_bounded;

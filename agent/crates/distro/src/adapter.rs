@@ -350,6 +350,18 @@ pub trait DistroAdapter: Send + Sync {
     /// fails by name rather than at exec time on a customer's server.
     fn pkill_binary(&self) -> AdapterBinary;
 
+    /// Absolute path of `pgrep`, for the process-execution allow-list.
+    ///
+    /// Account deletion asks it whether any LIVE process of the uid is left
+    /// (`pgrep --count --runstates <non-zombie states> --uid <uid>`), after
+    /// `pkill` has signalled them. `pkill --signal 0` cannot be that check: it
+    /// matches zombies, which hold nothing and cannot be killed, so a host whose
+    /// orphans are not reaped promptly would refuse every deletion.
+    ///
+    /// Same package as [`Self::pkill_binary`] on both families (`procps`,
+    /// `procps-ng`), so the installer needs no new dependency.
+    fn pgrep_binary(&self) -> AdapterBinary;
+
     /// Absolute path of `passwd`, for the process-execution allow-list.
     ///
     /// Needed for `passwd -S <user>`, which REPORTS whether a password can

@@ -31,6 +31,8 @@ struct ScriptedHost {
     statuses: Mutex<VecDeque<i32>>,
     /// Every spawn as `(argv without the program, call class)`.
     spawns: Mutex<Vec<(Vec<String>, CallClass)>>,
+    /// Every program spawned, in order.
+    programs: Mutex<Vec<String>>,
     /// Every interval paused for.
     pauses: Mutex<Vec<Duration>>,
     /// Whether every spawn fails to start.
@@ -43,6 +45,7 @@ impl ScriptedHost {
         Self {
             statuses: Mutex::new(statuses.iter().copied().collect()),
             spawns: Mutex::new(Vec::new()),
+            programs: Mutex::new(Vec::new()),
             pauses: Mutex::new(Vec::new()),
             unavailable: false,
         }
@@ -68,7 +71,10 @@ impl ScriptedHost {
 
     /// How many spawns were the kill (signal `KILL`).
     fn kills(&self) -> usize {
-        self.argvs().iter().filter(|a| a[1] == "KILL").count()
+        self.argvs()
+            .iter()
+            .filter(|a| a.get(1).is_some_and(|s| s == "KILL"))
+            .count()
     }
 
     /// Every interval paused for.
@@ -90,6 +96,7 @@ impl SystemHost for ScriptedHost {
                 reason: "not installed".to_owned(),
             });
         }
+        self.programs.lock().unwrap().push(program.to_string());
         self.spawns
             .lock()
             .unwrap()
@@ -141,11 +148,25 @@ fn managed() -> ManagedAccount {
     ManagedAccount::resolve(name, &passwd).expect("acme is a hosting account")
 }
 
-/// The argv `pkill` is expected to be given with `signal`, after the program.
-fn argv(signal: &str) -> Vec<String> {
-    ["--signal", signal, "--count", "--uid", &UID.to_string()]
+/// The argv `pkill` is expected to be given to kill, after the program.
+fn kill_argv() -> Vec<String> {
+    ["--signal", "KILL", "--count", "--uid", &UID.to_string()]
         .map(str::to_owned)
         .to_vec()
+}
+
+/// The argv `pgrep` is expected to be given to check, after the program: every
+/// state but zombie.
+fn probe_argv() -> Vec<String> {
+    [
+        "--count",
+        "--runstates",
+        "D,R,S,T,t,W,X,I,P",
+        "--uid",
+        &UID.to_string(),
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 
 #[test]
@@ -154,7 +175,7 @@ fn the_cull_kills_then_checks_with_the_exact_argv_of_the_managed_uid() {
 
     end_account_processes(&host, distro(), &managed()).expect("nothing is left");
 
-    assert_eq!(host.argvs(), vec![argv("KILL"), argv("0")]);
+    assert_eq!(host.argvs(), vec![kill_argv(), probe_argv()]);
 }
 
 #[test]
@@ -245,5 +266,20 @@ fn a_pkill_that_cannot_be_started_fails_the_cull() {
     assert!(
         matches!(error, AccountError::CommandUnavailable { .. }),
         "{error:?}"
+    );
+}
+
+#[test]
+fn the_kill_runs_pkill_and_the_check_runs_pgrep_so_a_zombie_is_not_counted() {
+    let host = ScriptedHost::answering(&[0, 1]);
+
+    end_account_processes(&host, distro(), &managed()).expect("nothing is left");
+
+    assert_eq!(
+        *host.programs.lock().unwrap(),
+        vec![
+            distro().pkill_binary().to_string(),
+            distro().pgrep_binary().to_string()
+        ]
     );
 }

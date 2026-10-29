@@ -296,7 +296,7 @@ jobs:
             maran-polygon-${{ matrix.image }} |
             tee -a "$RUNNER_TEMP/polygon-logs/step-1.log"
           status=0
-          docker run --rm \
+          docker run --rm --init \
             -v "$PWD:/maran" \
             -w /maran/agent \
             -e CARGO_TARGET_DIR=/tmp/target \
@@ -380,7 +380,7 @@ jobs:
             maran-polygon-${{ matrix.image }} |
             tee -a "$RUNNER_TEMP/polygon-logs/step-2.log"
           status=0
-          docker run --rm --privileged \
+          docker run --rm --init --privileged \
             -v "$PWD:/maran" \
             -w /maran/agent \
             -e CARGO_TARGET_DIR=/tmp/target \
@@ -437,7 +437,7 @@ jobs:
             maran-polygon-${{ matrix.image }} |
             tee -a "$RUNNER_TEMP/polygon-logs/step-3.log"
           status=0
-          docker run --rm --privileged \
+          docker run --rm --init --privileged \
             -v "$PWD:/maran" \
             -w /maran/agent \
             -e CARGO_TARGET_DIR=/tmp/target \

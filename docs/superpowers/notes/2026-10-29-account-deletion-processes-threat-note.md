@@ -80,7 +80,7 @@ resolve_managed -> drop databases -> remove SFTP logins -> remove FTPS logins
   -> END THE UID'S PROCESSES (new) -> resolve_managed again, compare ids -> userdel --remove
 ```
 
-Shape: up to 5 rounds of { `pkill --signal KILL --count --uid <uid>`; `pkill --signal 0 --count
+Shape: up to 5 rounds of { `pkill --signal KILL --count --uid <uid>`; `pgrep --count --runstates D,R,S,T,t,W,X,I,P
 --uid <uid>`; exit 1 (nothing matched) means done; exit 0 means pause 200 ms through an injected host
 method and go again }. If processes remain after the fifth round, return
 `AccountError::ProcessesRemain { username }` and **do not run `userdel`**. Any exit code other than
@@ -139,17 +139,24 @@ kernel behaviour, not measured), so each pass shrinks the set and a short bound 
   `userdel`; `pkill --signal 0` then reports "none" while a process lives, a verification sharing the
   view of the thing it verifies. Stated as a limit, not a closed case. The owner decided against a
   `hidepid` refusal; the reviewer is asked to confirm that is acceptable.
-- **Zombies and D-state.** `pkill --signal 0` counts a zombie, which holds only a table slot and is
-  reported as "remains"; reaping by init makes that transient. A task in uninterruptible sleep cannot
-  be killed until it wakes. Both end in `ProcessesRemain` (fail closed). OPEN: how an unkillable
-  (D-state) process is handled beyond the refusal and an operator retry.
+- **Zombies are excluded from the check; D-state is not.** The verification is
+  `pgrep --count --runstates D,R,S,T,t,W,X,I,P --uid <uid>` (`distro.pgrep_binary()`, same procps
+  package as `pkill`; `--runstates` verified on procps-ng 4.0.4 Ubuntu 24.04 and 3.3.17 AlmaLinux 9),
+  not `pkill --signal 0`, because `pkill` matches zombies. A zombie has exited: no memory, fds or
+  credential, cannot run code, so a reused uid inherits nothing from it. Counting it refused every
+  deletion wherever PID 1 does not reap (the polygon container ran `cargo test` as PID 1, so every
+  killed orphan stayed a zombie; PR #123). The polygon now runs with `--init` as well, so the test
+  environment reaps like systemd does. A task in uninterruptible sleep cannot be killed until it
+  wakes and still counts, ending in `ProcessesRemain` (fail closed). OPEN: how an unkillable
+  (D-state) process is handled beyond the refusal and an operator retry. Residual: a zombie's pid
+  stays allocated until reaped, which is not an uid-inheritance hazard.
 - **Other uid-keyed leftovers are OPEN and out of scope here:** queued `at` jobs under
   `/var/spool/at`, the mail spool, files in `/tmp` and `/var/tmp`, SysV shared memory and message
   queues, a systemd lingering user manager. A follow-up issue is to be filed for them. Whether `atd`
   and `linger` can exist for a managed account was not checked; `atd` in particular is a respawner
   the ordering above does not remove.
-- **`pkill` must exist.** `installer/lib/20-dependencies.sh` already installs `procps` / `procps-ng`
-  (`signalling_packages_for_family`, `assert_agent_tooling`), so no installer change is needed.
+- **`pkill` and `pgrep` must exist.** `installer/lib/20-dependencies.sh` already installs `procps` /
+  `procps-ng` (`signalling_packages_for_family`), which ships both, so no installer change is needed.
 
 ## Interaction with the account lock
 

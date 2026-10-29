@@ -134,6 +134,10 @@ impl DistroAdapter for RhelAdapter {
         rhel_services::pkill_binary()
     }
 
+    fn pgrep_binary(&self) -> AdapterBinary {
+        rhel_services::pgrep_binary()
+    }
+
     fn passwd_binary(&self) -> AdapterBinary {
         rhel_services::passwd_binary()
     }
