@@ -1292,3 +1292,27 @@ setting. It was restored to `60`, the value before, and verified. Container host
   changes. `CHANGELOG.md` is modified in this worktree by another part and was not read here.
 - **Issue #92 stays open** until the human review is recorded and the `final` row's sha256 is
   confirmed against the branch head.
+
+## Amendment, 2026-10-29: enable waits for the control port, and a rollback removes what it wrote (issue #102)
+
+What changed in `agent/crates/ops/src/ftps/`, and what an attacker could do with it:
+
+- **Enable and TLS reload wait for the daemon to answer.** `systemctl restart` returns once the unit
+  forks; vsftpd binds port 21 tens of milliseconds later, so the single probe that followed it failed
+  and the enable rolled back on a healthy host. `wait_for_control_port.rs` now probes for the `220`
+  greeting every 100 ms up to 10 s, on the host's injected clock. The bound is what keeps this safe:
+  a daemon that accepts but never greets costs at most 10 s plus one 2 s probe, well inside the
+  panel's 30 s operation timeout, and the probe still only connects to 127.0.0.1:21.
+- **"Already converged" is no longer trusted on the config alone.** The early return now requires the
+  daemon to be running AND answering; otherwise enable re-validates, rewrites (which restarts the unit)
+  and waits. Before, a retry after a failed enable answered `enabled: true, running: false` as success,
+  so an operator saw FTPS on while nothing listened.
+- **A rollback with no previous config removes the config it wrote.** This reverses the earlier
+  choice, recorded in `enable_ftps.rs`, to leave the rendered `vsftpd.conf` on disk after a failed
+  first enable: that leftover file is exactly what made the next enable take the converged branch.
+  The removal goes through the existing `FtpsHost::remove_file` seam on the agent-owned config path
+  only; no caller-supplied path reaches it.
+
+Not changed: the unit, its sandbox, PAM, the jail base, TLS settings. No new privilege, no new path
+written. Not measured here: the real-systemd install lane (the polygon's `systemctl` is a shim), and
+a crash-looping daemon still costs the full 10 s before `NotListening`.
