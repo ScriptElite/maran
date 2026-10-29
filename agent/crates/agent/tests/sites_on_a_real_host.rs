@@ -103,7 +103,7 @@ fn a_php_site_is_written_and_the_real_nginx_accepts_it() {
 
     let contents = std::fs::read_to_string(vhost).expect("the vhost must be readable");
     assert!(
-        contents.contains("fastcgi_pass unix:/run/maran/php/"),
+        contents.contains("fastcgi_pass unix:/run/maran-php/"),
         "a PHP site's vhost must point at the pool socket the agent owns"
     );
     assert!(

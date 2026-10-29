@@ -48,7 +48,7 @@
   - nginx from Ubuntu, php-fpm 8.3 from Sury — the repository the Debian adapter's package and service names are written against.
   - A pinned Rust toolchain, `protoc` and a C linker, so the agent's tests compile *inside* the image.
   - nginx includes `/etc/maran/nginx/sites` because the image RUNS `installer/lib/80-nginx.sh`'s `install_agent_config_include` — the installer's own code, not a copy of it. That is deliberate: the image used to make the edit itself, so every site test asserted a precondition the image had manufactured, and the fact that the installer did neither the directory nor the include went unseen by the whole suite. A build of these images is now the check that the installer still does it.
-  - Creates `/run/maran` and `/run/maran/php`; `/etc/maran/nginx/sites` and `/etc/maran/certificates` come from the installer step above.
+  - Creates `/run/maran`, and `/run/maran-php` from the installer's own tmpfiles snippet; `/etc/maran/nginx/sites` and `/etc/maran/certificates` come from the installer step above.
   - MariaDB and OpenSSH the same way: the packages come from `installer/lib/85-mysql.sh`'s own `mysql_packages_for_family`, and the SFTP group, jail base directory and sshd `Match` block come from running `installer/lib/86-sftp.sh`'s `install_sftp_prerequisites` — see `polygon/asserts/assert-installer-steps.sh` below.
   - **The build context is the repository root**, not `docker/polygon`, because the image copies a file out of `installer/`. See the build commands below.
 

@@ -68,6 +68,10 @@ remove_systemd_units() {
   # of leftover an operator cannot explain.
   rm -f /etc/tmpfiles.d/maran-api.conf
   rm -rf /run/maran-api
+  # Likewise the PHP pool socket directory: a sibling of /run/maran, built by its own snippet, so
+  # the /run/maran removal further down does not reach it and the snippet would recreate it.
+  rm -f /etc/tmpfiles.d/maran-php.conf
+  rm -rf /run/maran-php
   systemctl daemon-reload
 }
 

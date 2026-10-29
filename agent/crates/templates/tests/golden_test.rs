@@ -33,7 +33,7 @@ fn php_body() -> String {
         access_log: "/var/log/maran/sites/acme/example.com.access.log",
         error_log: "/var/log/maran/sites/acme/example.com.error.log",
         document_root: "/home/acme/sites/example.com",
-        fpm_socket: Some("/run/maran/php/acme-8.3.sock"),
+        fpm_socket: Some("/run/maran-php/acme-8.3.sock"),
         upstream: None,
     }
     .render_config()
@@ -255,7 +255,7 @@ fn a_pool_renders_its_golden() {
     let pool = Pool {
         pool_name: "acme-8.3",
         account: "acme",
-        socket_path: "/run/maran/php/acme-8.3.sock",
+        socket_path: "/run/maran-php/acme-8.3.sock",
         web_server_user: "www-data",
         max_children: 10,
         start_servers: 2,

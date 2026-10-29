@@ -16,6 +16,14 @@ readonly MARAN_UNIT_DIR="/etc/systemd/system"
 # one place.
 readonly MARAN_TMPFILES_DIR="/etc/tmpfiles.d"
 readonly MARAN_API_TMPFILES_NAME="maran-api.conf"
+# The snippet that builds the PHP-FPM pool socket directory. Unlike the api's it has no
+# placeholders, so it is installed as it stands (installer/systemd/maran-php.tmpfiles.conf says why
+# that directory is not under /run/maran).
+readonly MARAN_PHP_TMPFILES_NAME="maran-php.conf"
+# The directory that snippet builds. The agent writes pool sockets here
+# (AgentPaths::PHP_FPM_SOCKET_DIRECTORY) and the agent unit's ReadWritePaths= names it; a rename
+# here without one there breaks every PHP site.
+readonly MARAN_PHP_SOCKET_DIRECTORY="/run/maran-php"
 # The template unit through which the agent installs a PHP version as root, outside its own sandbox
 # (issue #93). The file name is the contract with the agent: ops/src/php starts
 # maran-php-install@<package>.service, so a rename here without one there installs nothing.
@@ -191,6 +199,8 @@ install_units() {
   render_api_runtime_dir "$tmp"
   install -d -m 0755 "$MARAN_TMPFILES_DIR"
   install -m 0644 "$tmp" "${MARAN_TMPFILES_DIR}/${MARAN_API_TMPFILES_NAME}"
+  # Nothing to substitute, so installed straight from the source file.
+  install -m 0644 "${LIB_DIR}/../systemd/maran-php.tmpfiles.conf" "${MARAN_TMPFILES_DIR}/${MARAN_PHP_TMPFILES_NAME}"
   render_agent_unit "$tmp"
   install -m 0644 "$tmp" "${MARAN_UNIT_DIR}/maran-agent.service"
   # Installed, NEVER enabled: it has no [Install] section and only the agent starts it.
@@ -207,6 +217,35 @@ install_units() {
 # what makes re-running the installer put right a host where the ownership was changed by hand.
 build_api_socket_directory() {
   systemd-tmpfiles --create "${MARAN_TMPFILES_DIR}/${MARAN_API_TMPFILES_NAME}"
+}
+
+# build_php_socket_directory: apply the PHP socket snippet now, for the same reasons as the api's.
+#
+# The agent writes a pool's socket into this directory the first time a PHP site is created, and
+# php-fpm and nginx both resolve a path through it, so it must exist at the right owner and mode
+# before the agent starts. `--create` also corrects a directory changed by hand.
+build_php_socket_directory() {
+  systemd-tmpfiles --create "${MARAN_TMPFILES_DIR}/${MARAN_PHP_TMPFILES_NAME}"
+}
+
+# assert_php_socket_directory: the PHP socket directory observed on this host rather than assumed.
+#
+# Must be 755 root:root. Anything narrower and the web server's user cannot resolve a path inside
+# it, so every PHP site answers 502 while the install reports success; anything writable by
+# another uid and a tenant could bind or unlink a socket under another pool's name.
+assert_php_socket_directory() {
+  local expected="755 root root" observed
+  observed="$(stat -c '%a %U %G' "$MARAN_PHP_SOCKET_DIRECTORY" 2>/dev/null || true)"
+  if [ "$observed" != "$expected" ]; then
+    cat >&2 <<EOF
+70-services.sh: ${MARAN_PHP_SOCKET_DIRECTORY} is '${observed:-absent}' but must be '${expected}'.
+
+It is built by ${MARAN_TMPFILES_DIR}/${MARAN_PHP_TMPFILES_NAME}; check that file and that
+'systemd-tmpfiles --create' accepted it.
+EOF
+    exit 1
+  fi
+  echo "PHP socket directory ${MARAN_PHP_SOCKET_DIRECTORY} is ${expected}."
 }
 
 # assert_api_socket_directory: the boundary itself, observed on this host rather than assumed.
@@ -319,6 +358,9 @@ step_services() {
   # ReadWritePaths= names this directory, so a unit whose directory does not exist does not start.
   build_api_socket_directory
   assert_api_socket_directory
+  # Same precondition for the PHP pool sockets: the agent unit's ReadWritePaths= names this path.
+  build_php_socket_directory
+  assert_php_socket_directory
   # Start the agent first: the api's health check depends on an agent handshake, and
   # starting order here matches the After= dependency declared in maran-api.service.
   systemctl restart maran-agent.service

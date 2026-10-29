@@ -51,7 +51,7 @@ fn a_php_site_is_written_with_its_own_fastcgi_pass() {
     let vhost = host.config(Path::new(&created.config_path)).unwrap();
     assert!(
         vhost.contains(&format!(
-            "fastcgi_pass unix:/run/maran/php/{}-8.3.sock;",
+            "fastcgi_pass unix:/run/maran-php/{}-8.3.sock;",
             input.account.as_str()
         )),
         "the vhost must point at this account's pool for this version: {vhost}"
@@ -191,7 +191,7 @@ fn a_site_with_a_certificate_serves_the_same_body_on_both_ports() {
         "the TLS block must serve the same root: {ssl_block}"
     );
     assert!(ssl_block.contains(&format!(
-        "fastcgi_pass unix:/run/maran/php/{}-8.3.sock;",
+        "fastcgi_pass unix:/run/maran-php/{}-8.3.sock;",
         input.account.as_str()
     )));
     // The logs are the same seam one directive higher: port 80 only redirects,
@@ -282,14 +282,14 @@ fn a_new_php_site_gets_the_pool_its_own_vhost_points_at() {
         .expect("creating a PHP site must write the pool its vhost will point at");
     assert!(
         vhost.contains(&format!(
-            "fastcgi_pass unix:/run/maran/php/{}-8.3.sock;",
+            "fastcgi_pass unix:/run/maran-php/{}-8.3.sock;",
             input.account.as_str()
         )),
         "{vhost}"
     );
     assert!(
         pool.contains(&format!(
-            "listen = /run/maran/php/{}-8.3.sock",
+            "listen = /run/maran-php/{}-8.3.sock",
             input.account.as_str()
         )),
         "the pool must listen on exactly the socket the vhost names: {pool}"

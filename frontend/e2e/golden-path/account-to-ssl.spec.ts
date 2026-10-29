@@ -50,7 +50,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  * docker run -d --name maran-golden -p 8081:80 \
  *   -v "$PWD/agent/target/debug/maran-agent:/usr/local/bin/maran-agent:ro" \
  *   -v "/run/user/$(id -u)/maran:/run/maran" maran-polygon-ubuntu24 sleep infinity
- * docker exec maran-golden sh -c 'mkdir -p /run/maran/php; nginx; \
+ * docker exec maran-golden sh -c 'mkdir -p /run/maran-php; nginx; \
  *   maran-agent --socket /run/maran/agent.sock --allow-uid '"$(id -u)"' &'
  * docker exec maran-golden chgrp "$(id -g)" /run/maran/agent.sock
  * # then set Agent__SocketPath=/run/user/<uid>/maran/agent.sock in .env and restart `maran dev`
