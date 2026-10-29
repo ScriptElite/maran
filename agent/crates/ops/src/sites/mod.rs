@@ -25,6 +25,7 @@ pub mod log_sink;
 // be able to start one by another route.
 mod disable_site;
 mod enable_site;
+mod ensure_traversable_directory;
 #[cfg(test)]
 #[path = "../tests/sites/fake_site_host.rs"]
 pub(crate) mod fake_site_host;

@@ -17,6 +17,7 @@ use crate::safe_write::model::{Reload, Validator};
 use crate::safe_write::{
     CommandOutcome, ConfigHost, SafeWriteError, create_config, remove_config, write_config,
 };
+use crate::sites::ensure_traversable_directory::ensure_traversable_directory;
 use crate::sites::follow_log::follow_log;
 use crate::sites::log_sink::LogSink;
 use crate::sites::model::log_tail_request::LogTailRequest;
@@ -169,6 +170,11 @@ impl SiteHost for ProcessSiteHost {
     /// Creates the directories in a forked child that has dropped to the
     /// account.
     ///
+    /// Every level below the home is created `0755` by an explicit `chmod`, and an
+    /// earlier release's narrower level is repaired (`ensure_traversable_directory`):
+    /// the agent runs under `UMask=0027`, and a umask-narrowed `sites/` made the
+    /// web worker answer 404 for every new site. The home stays `0750`.
+    ///
     /// The ids are resolved here, at the moment of use, and never cached: an
     /// account deleted and recreated between two operations gets a different
     /// uid, and a cached one would write into whoever now holds it.
@@ -183,9 +189,11 @@ impl SiteHost for ProcessSiteHost {
         // creates directories and nothing else. It must not allocate freely
         // (only the forking thread survives into it), which is why the paths
         // are built by the parent and merely read here.
+        let home = Path::new(AgentPaths::ACCOUNT_HOME_ROOT).join(account.as_str());
         fork_as_account(&ids, || {
             for directory in directories {
-                std::fs::create_dir_all(directory).map_err(|_| PrivError::WorkFailed)?;
+                ensure_traversable_directory(&home, directory)
+                    .map_err(|_| PrivError::WorkFailed)?;
             }
             Ok(())
         })?;

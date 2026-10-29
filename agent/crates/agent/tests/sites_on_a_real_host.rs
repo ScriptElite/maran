@@ -400,6 +400,25 @@ fn a_real_nginx_serves_a_site_out_of_the_accounts_own_home() {
         .unwrap_or_else(|error| panic!("creating a static site must succeed: {error}"));
     let _vhost = PolygonConfigFile::at(Path::new(&created.config_path));
 
+    // The modes the web worker's traversal depends on, asserted directly: `sites/`
+    // and the document root 0755 whatever umask the daemon runs under, the home
+    // 0750 and never world-readable. (SELinux labels are NOT observed here.)
+    let docroot = Path::new(&created.document_root);
+    let mode_of = |path: &Path| {
+        std::fs::metadata(path)
+            .expect("must exist")
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    assert_eq!(mode_of(docroot), 0o755, "the document root must be 0755");
+    assert_eq!(
+        mode_of(docroot.parent().expect("sites/")),
+        0o755,
+        "sites/ must be 0755"
+    );
+    assert_eq!(mode_of(account.home()), 0o750, "the home must stay 0750");
+
     // Written AS THE ACCOUNT, through the same file operation the panel uses, so the
     // file's owner and mode are a customer's and not root's.
     let page = within("the index write", {
