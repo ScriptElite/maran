@@ -5,6 +5,13 @@ than a strict category list: what changed and why it matters to somebody running
 
 ## Unreleased
 
+**A published release can no longer ship without both architectures.** A build, sign or
+verify run with `--publish` now refuses unless both x86_64 and aarch64 are present: `build --publish`
+requires `--arch both`, and signing and verification refuse a manifest missing any of the api, agent or
+frontend entries for either architecture. A local build without `--publish` still targets the host only.
+An installer run on an architecture the release was not built for now says so plainly, naming the
+architecture, instead of reporting only a missing manifest entry.
+
 **An administrator locked out of the panel now has a supported way back in.** When the only administrator
 lost a password or an authenticator and no mail was configured, the only options were editing the
 database by hand, which leaves no audit row, or reinstalling. The installer now places a root-only
