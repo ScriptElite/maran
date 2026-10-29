@@ -36,6 +36,18 @@ pub trait PhpHost: ConfigHost {
     /// is a package database lock contended with every real installation.
     fn directory_exists(&self, path: &Path) -> bool;
 
+    /// Reads the pool file at `path`, or `None` when it is absent or cannot be
+    /// read.
+    ///
+    /// Used by `sites::converge_php_site` to compare the pool a site SHOULD have
+    /// with the one on disk. "Unreadable" is folded into `None` on purpose: the
+    /// only question asked is "does the file on disk equal the render?", and a
+    /// file that cannot be read is not equal to it, so the caller writes the
+    /// render — through the same protocol that would restore whatever was there.
+    /// The pool directory is root-owned and written only by this agent, so no
+    /// customer path is read from here.
+    fn read_config(&self, path: &Path) -> Option<String>;
+
     /// Creates `path` and every missing parent, owned by root, with `mode`.
     ///
     /// Used only for the agent's own socket directory, which is outside every

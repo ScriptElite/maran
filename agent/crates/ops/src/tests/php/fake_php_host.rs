@@ -202,6 +202,15 @@ impl FakePhpHost {
         *self.validation.lock().unwrap() = (1, stderr.to_owned());
     }
 
+    /// Puts `contents` at `path` as if a pool were already on disk there,
+    /// without going through the protocol (no write is counted).
+    pub(crate) fn place_config(&self, path: &Path, contents: &str) {
+        self.files
+            .lock()
+            .unwrap()
+            .insert(path.to_path_buf(), contents.to_owned());
+    }
+
     /// The content of a pool file, if the host holds one.
     pub(crate) fn config(&self, path: &Path) -> Option<String> {
         self.files.lock().unwrap().get(path).cloned()
@@ -287,6 +296,10 @@ impl ConfigHost for FakePhpHost {
 impl PhpHost for FakePhpHost {
     fn directory_exists(&self, path: &Path) -> bool {
         self.directories.lock().unwrap().contains(path)
+    }
+
+    fn read_config(&self, path: &Path) -> Option<String> {
+        self.files.lock().unwrap().get(path).cloned()
     }
 
     fn create_directory(&self, path: &Path, mode: u32) -> Result<(), PhpOpError> {

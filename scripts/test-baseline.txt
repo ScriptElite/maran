@@ -285,6 +285,7 @@ rust	ftps_on_a_real_host [tests/ftps_on_a_real_host.rs]	0	0	15
 rust	handshake [tests/handshake.rs]	9	0	0
 rust	monitor_on_a_real_host [tests/monitor_on_a_real_host.rs]	0	0	8
 rust	php_install_rpc [tests/php_install_rpc.rs]	7	0	0
+rust	php_socket_migration_on_a_real_host [tests/php_socket_migration_on_a_real_host.rs]	0	0	3
 rust	php_pools_on_a_real_host [tests/php_pools_on_a_real_host.rs]	0	0	3
 rust	privileges_on_a_real_host [tests/privileges_on_a_real_host.rs]	0	0	15
 rust	restore_recovery_on_a_real_host [tests/restore_recovery_on_a_real_host.rs]	0	0	4

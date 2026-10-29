@@ -108,6 +108,11 @@ impl PhpHost for InstallHost {
         self.directories.lock().unwrap().contains(path)
     }
 
+    /// Unreachable: installing reads no pool.
+    fn read_config(&self, _path: &Path) -> Option<String> {
+        panic!("an install must not read a pool file")
+    }
+
     /// Unreachable: installing creates no directory itself.
     fn create_directory(&self, _path: &Path, _mode: u32) -> Result<(), PhpOpError> {
         panic!("an install must not create a directory")

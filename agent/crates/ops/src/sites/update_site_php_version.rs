@@ -3,6 +3,7 @@
 use maran_distro::DistroAdapter;
 
 use crate::php::{PhpHost, is_installed};
+use crate::sites::converge_php_site::converge_php_site;
 use crate::sites::is_suspended_vhost::is_suspended_vhost;
 use crate::sites::model::create_site_input::CreateSiteInput;
 use crate::sites::model::php_switch::PhpSwitch;
@@ -38,8 +39,13 @@ use crate::sites::{SiteHost, SitesOpError};
 /// Refuses a version that is not installed rather than installing it: the
 /// contract makes that `VALIDATION_FAILED`, and installing takes minutes and
 /// streams progress, so it is its own operation. Setting the version a site
-/// already has is a success that writes nothing — the panel retries after a
-/// timeout, and a reload of nginx and php-fpm per retry is a storm.
+/// already has CONVERGES it (`sites::converge_php_site`): the pool and the
+/// vhost are rendered, compared with the files on disk, and only a file that
+/// differs is rewritten. A site that is already current is a success that
+/// writes and reloads nothing — the panel retries after a timeout, and a reload
+/// of nginx and php-fpm per retry is a storm — while a site an earlier release
+/// wrote, with a socket path this release no longer uses, is brought to the
+/// current one by the same call.
 ///
 /// # Errors
 ///
@@ -77,15 +83,18 @@ pub fn update_site_php_version(
         });
     }
 
-    // The no-op case, decided against the site's own record of what it is
-    // rather than against a marker file beside it — the same way `enable_site`
-    // and `disable_site` decide, so all three converge on retry.
+    // The same-version case, decided against the site's own record of what it
+    // is rather than against a marker file beside it — the same way
+    // `enable_site` and `disable_site` decide, so all three converge on retry.
+    // It is no longer an early return: what the files on disk hold may be what an
+    // earlier release rendered, so they are compared with today's render and
+    // only the ones that differ are written.
     if input.kind
         == (SiteKind::Php {
             version: version.clone(),
         })
     {
-        return Ok(());
+        return converge_php_site(host, php_host, distro, input, switch);
     }
 
     write_site_pool(php_host, distro, input, version, max_children, overrides)?;

@@ -26,6 +26,15 @@ public sealed class RecordingAgentSitesClient : IAgentSitesClient
     /// <summary>When set, refuses only <see cref="DeleteAsync"/> with this error.</summary>
     public Error? DeleteFailure { get; init; }
 
+    /// <summary>Domains whose <see cref="ChangePhpVersionAsync"/> is refused while every other domain succeeds.</summary>
+    public HashSet<string> ChangePhpFailingDomains { get; } = [];
+
+    /// <summary>
+    /// Domains whose <see cref="ChangePhpVersionAsync"/> THROWS instead of answering, while every other
+    /// domain succeeds. Models a transport fault (an agent that is down) rather than a typed refusal.
+    /// </summary>
+    public HashSet<string> ChangePhpThrowingDomains { get; } = [];
+
     /// <summary>Operations this client was asked to perform, in order.</summary>
     public List<string> Calls { get; } = [];
 
@@ -90,7 +99,14 @@ public sealed class RecordingAgentSitesClient : IAgentSitesClient
         Tokens.Add(cancellationToken);
         Descriptors.Add(site);
         MaxChildren.Add(maxChildren);
-        return Task.FromResult(Answer());
+        if (ChangePhpThrowingDomains.Contains(domain))
+        {
+            throw new InvalidOperationException($"The agent is unreachable for {domain}.");
+        }
+
+        return Task.FromResult(ChangePhpFailingDomains.Contains(domain)
+            ? Result<bool>.Fail(Error.Of("AgentSystemFailure", ErrorType.Failure))
+            : Answer());
     }
 
     /// <inheritdoc/>

@@ -227,6 +227,11 @@ impl PhpHost for UnusedPhpHost {
     }
 
     /// Unreachable: see [`UnusedPhpHost`].
+    fn read_config(&self, _path: &Path) -> Option<String> {
+        unreachable!("no rpc in this file reaches the php host")
+    }
+
+    /// Unreachable: see [`UnusedPhpHost`].
     fn create_directory(&self, _path: &Path, _mode: u32) -> Result<(), PhpOpError> {
         unreachable!("no rpc in this file reaches the php host")
     }

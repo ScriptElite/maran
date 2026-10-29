@@ -81,6 +81,15 @@ impl PhpHost for ProcessPhpHost {
         path.is_dir()
     }
 
+    /// Reads the pool file as root, `None` when it is absent or unreadable.
+    ///
+    /// The pool directory belongs to the agent (root-owned, written only
+    /// through the config-write protocol), so this is not a customer path and
+    /// needs no privilege drop.
+    fn read_config(&self, path: &Path) -> Option<String> {
+        std::fs::read_to_string(path).ok()
+    }
+
     /// Creates the agent's own socket directory and sets its mode explicitly.
     ///
     /// The mode is set after creation rather than being left to

@@ -363,6 +363,10 @@ step_services() {
   assert_php_socket_directory
   # Start the agent first: the api's health check depends on an agent handshake, and
   # starting order here matches the After= dependency declared in maran-api.service.
+  # An upgrade re-renders every PHP site's pool and vhost when the panel starts (issue #125): the
+  # panel asks this agent to converge each one, which is how a site written by an earlier release
+  # moves to the current socket directory. Nothing in this installer touches a rendered config, so
+  # a restart here neither needs nor performs that work.
   systemctl restart maran-agent.service
   # Waiting HERE rather than beside the api's wait is deliberate: the api's health check depends on
   # an agent handshake, so letting the agent bind before the api starts makes the order the After=
