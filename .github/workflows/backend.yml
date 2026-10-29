@@ -174,6 +174,44 @@ jobs:
             exit 1
           fi
 
+      # RESOURCE TELEMETRY, started before the build so it covers the whole heavy part of the job.
+      # WHY IT EXISTS. A run of this lane was ended by the runner shutting down in the middle of
+      # `maran test backend`, with the test output going only to a log file, so the job log said
+      # nothing about which project was running or whether the machine was out of memory or out of
+      # disk. Without a measurement the cause is a guess, and the fix would be one too. This sampler
+      # records the facts that tell the two apart: memory, both filesystems the build writes to, the
+      # largest processes, and any kernel out-of-memory kill.
+      #
+      # It is detached (`setsid`, all descriptors redirected) because a step's children are reaped
+      # when the step ends; a sampler left attached would stop before the build began. It is
+      # observation only and never fails the job: every command inside it tolerates its own failure.
+      #
+      # WHAT IT CANNOT SEE, stated rather than implied: a shutdown that gives the machine no time to
+      # write another sample leaves the log ending up to ten seconds before the event, and the
+      # runner's own agent being killed at the hosting layer leaves no kernel message at all.
+      - name: Start resource telemetry
+        run: |
+          telemetry="$RUNNER_TEMP/telemetry.log"
+          : > "$telemetry"
+          setsid nohup bash -c '
+            log="$1"; temp="$2"
+            while true; do
+              {
+                echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+                free -m
+                df -h /
+                df -h "$temp"
+                echo "--- top 8 by RSS (KiB) ---"
+                ps -eo rss,comm --sort=-rss | head -9
+                echo "--- kernel out-of-memory lines ---"
+                sudo dmesg 2>&1 | grep -iE "out of memory|oom-kill|killed process" | tail -5
+                echo
+              } >> "$log" 2>&1
+              sleep 10
+            done
+          ' telemetry "$telemetry" "$RUNNER_TEMP" > /dev/null 2>&1 < /dev/null &
+          echo "sampler started (pid $!), writing to $telemetry"
+
       # Warnings are errors, unused usings are errors, banned APIs are errors — the build
       # itself is the first quality gate (backend/Directory.Build.props).
       - name: Build
@@ -312,10 +350,23 @@ jobs:
       # with `!cancelled()` alone this step also fires when a gate ABOVE the verdict failed, and
       # then errors on a log that was never written — a second, misleading red on a job whose real
       # failure is somewhere else entirely.
+      #
+      # The telemetry log travels with it, so the resource curve of a lane that died is kept next
+      # to the rows it died in. It is a separate `if: always()` step ahead of the upload because
+      # the upload below is conditioned on the verdict step having run, and the curve is needed
+      # most on the runs where that step never finished.
+      - name: Show the end of the resource telemetry
+        if: always()
+        run: |
+          echo "--- last 60 lines of the resource telemetry ---"
+          tail -60 "$RUNNER_TEMP/telemetry.log" || echo "(the telemetry log is empty or absent)"
+
       - name: Keep the verdict log
         if: ${{ !cancelled() && steps.verdict.conclusion != 'skipped' }}
         uses: actions/upload-artifact@v7
         with:
           name: backend-test-verdict
-          path: ${{ runner.temp }}/verdict/backend.log
+          path: |
+            ${{ runner.temp }}/verdict/backend.log
+            ${{ runner.temp }}/telemetry.log
           if-no-files-found: error
